@@ -73,6 +73,35 @@ intake:
         severity: medium
       reason: 示例：给缺失 severity 的事件补默认值
 
+policies:
+  rules:
+    - name: payment-critical-route
+      enabled: true
+      priority: 10
+      match:
+        labels.service: payment-api
+        labels.env: prod
+        severity: critical
+      should_notify: true
+      should_analyze: true
+      channels: [console]
+      enrich_tools: [query_logs, query_prometheus]
+      escalation_channels: [console]
+      require_approval: false
+
+    - name: dev-info-no-notify
+      enabled: true
+      priority: 50
+      match:
+        labels.env: dev
+        severity: info
+      should_notify: false
+      should_analyze: false
+      channels: []
+      enrich_tools: []
+      escalation_channels: []
+      require_approval: false
+
 model:
   router: default
   providers:

@@ -30,13 +30,13 @@ class IntakeRuleEngine:
         return self._rules.pop(rule_id, None) is not None
 
     def evaluate(self, event: EventEnvelope) -> IntakeDecision:
-        current_event = _mark_ingested(event)
+        ingested_event = _mark_ingested(event)
 
         for rule in self.list_rules():
-            if not rule.enabled or not _matches(rule.match, current_event):
+            if not rule.enabled or not _matches(rule.match, event):
                 continue
 
-            rewritten = _apply_rule(rule, current_event)
+            rewritten = _apply_rule(rule, ingested_event)
             allowed = rule.action != "drop"
             return IntakeDecision(
                 allowed=allowed,
@@ -47,7 +47,7 @@ class IntakeRuleEngine:
                 event=rewritten,
             )
 
-        return IntakeDecision(event=current_event)
+        return IntakeDecision(event=ingested_event)
 
 
 def _mark_ingested(event: EventEnvelope) -> EventEnvelope:

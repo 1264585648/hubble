@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from hubble.alerts.models import Alert
+from hubble.channels.config import load_channel_registry_from_file
 from hubble.events.models import EventEnvelope
 from hubble.incidents.models import Incident
 from hubble.intake.models import IntakeDecision, IntakeDryRunRequest, IntakeDryRunResponse, IntakeRule
@@ -29,6 +30,7 @@ CONFIG_PATH = os.getenv("HUBBLE_CONFIG", "configs/hubble.example.yaml")
 runtime = HubbleRuntime(
     policy_engine=PolicyEngine(load_policy_rules_from_file(CONFIG_PATH)),
     reasoning_service=load_reasoning_service_from_file(CONFIG_PATH),
+    channel_registry=load_channel_registry_from_file(CONFIG_PATH),
 )
 
 

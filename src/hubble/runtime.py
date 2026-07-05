@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from hubble.adapters.webhook import GenericWebhookAdapter
 from hubble.alerts.models import Alert
 from hubble.alerts.service import AlertLifecycleService
 from hubble.channels.base import ChannelRegistry, ConsoleChannelAdapter
@@ -51,12 +52,8 @@ class HubbleRuntime:
             self.channel_registry.register(ConsoleChannelAdapter())
 
     async def ingest_webhook(self, source: str, payload: dict[str, Any]) -> AlertPipelineResult:
-        event = EventEnvelope(
-            type="alert.ingested",
-            source=source,
-            subject=_event_subject(payload),
-            data=payload,
-        )
+        adapter = GenericWebhookAdapter(source=source)
+        event = adapter.to_event(payload)
         await self.event_bus.publish(event)
         return await self.process_alert_event(event)
 
@@ -112,16 +109,6 @@ class HubbleRuntime:
             f"你的问题: {message.text}\n"
             "当前版本已完成会话入口，下一步会接入工具调用和多轮上下文。"
         )
-
-
-def _event_subject(payload: dict[str, Any]) -> str | None:
-    labels = payload.get("labels") or {}
-    return (
-        payload.get("title")
-        or payload.get("alertname")
-        or labels.get("alertname")
-        or payload.get("name")
-    )
 
 
 def _build_channel_message(alert: Alert, incident: Incident, analysis: Analysis) -> ChannelMessage:

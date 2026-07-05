@@ -124,16 +124,95 @@ configs/hubble.example.yaml
 README.md
 ```
 
+## 2026-07-05：第二批任务执行
+
+### 已完成任务
+
+```text
+T2.6 Incident 状态流转 API
+T3.3 YAML Policy DSL
+```
+
+## T2.6 Incident 状态流转 API
+
+### 完成内容
+
+- `IncidentLifecycleService` 新增状态机方法：
+  - `ack()`
+  - `resolve()`
+  - `reopen()`
+- 新增 API：
+  - `POST /incidents/{id}/ack`
+  - `POST /incidents/{id}/resolve`
+  - `POST /incidents/{id}/reopen`
+- 状态变更会写入 timeline。
+- `resolve()` 会写入 `resolved_at`。
+- `reopen()` 会清空 `resolved_at`。
+- 不存在的 incident 返回 404。
+
+### 验收结果
+
+- ack 后状态变为 `investigating`。
+- resolve 后状态变为 `resolved`。
+- reopen 后状态变为 `open`。
+- 每次状态变化写入 timeline。
+- 测试覆盖正常流转和 404。
+
+## T3.3 YAML Policy DSL
+
+### 完成内容
+
+- 新增 `PolicyRule` 模型。
+- `PolicyEngine` 支持规则列表。
+- 支持按以下字段匹配：
+  - `source`
+  - `severity`
+  - `status`
+  - `incident.status`
+  - `incident.owner_team`
+  - `labels.xxx`
+  - `annotations.xxx`
+- 支持输出：
+  - `should_notify`
+  - `should_analyze`
+  - `channels`
+  - `enrich_tools`
+  - `escalation_channels`
+  - `require_approval`
+- 新增 YAML 加载器：`load_policy_rules_from_file()`。
+- 服务启动时读取 `HUBBLE_CONFIG`，默认读取 `configs/hubble.example.yaml`。
+- Runtime 现在会尊重 `PolicyDecision.should_analyze`。
+
+### 验收结果
+
+- 可以通过 YAML 定义 payment-api 路由规则。
+- 配置变更后重启服务生效。
+- 命中规则后 `PolicyDecision.reason` 包含规则名。
+- 测试覆盖策略规则匹配、关闭分析和 YAML 加载。
+
+## 本轮新增 / 修改文件
+
+```text
+src/hubble/incidents/service.py
+src/hubble/policies/models.py
+src/hubble/policies/service.py
+src/hubble/policies/config.py
+src/hubble/runtime.py
+src/hubble/server.py
+configs/hubble.example.yaml
+tests/test_server.py
+tests/test_policy.py
+README.md
+```
+
 ## 当前最近下一批任务
 
 建议继续按以下顺序执行：
 
 ```text
-1. T2.6 Incident 状态流转 API
-2. T3.3 YAML Policy DSL
-3. T4.3 OpenAI-compatible Provider
-4. T6.2 Feishu ChannelAdapter
-5. T5.2 HTTP Tool
-6. T5.3 Prometheus Query Tool
-7. T7.1 Storage Interface
+1. T4.3 OpenAI-compatible Provider
+2. T6.2 Feishu ChannelAdapter
+3. T5.2 HTTP Tool
+4. T5.3 Prometheus Query Tool
+5. T7.1 Storage Interface
 ```

@@ -1,0 +1,16 @@
+{
+  "title": "payment-api error rate is high",
+  "description": "HTTP 5xx error rate exceeded 5% for 5 minutes.",
+  "severity": "high",
+  "status": "firing",
+  "labels": {
+    "service": "payment-api",
+    "env": "prod",
+    "region": "ap-southeast-1",
+    "alertname": "HighErrorRate"
+  },
+  "annotations": {
+    "summary": "payment-api 5xx rate is above threshold",
+    "runbook": "https://example.com/runbooks/payment-api-high-error-rate"
+  }
+}

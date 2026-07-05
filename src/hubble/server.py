@@ -4,38 +4,29 @@ from typing import Any
 
 import uvicorn
 from fastapi import FastAPI
+from pydantic import BaseModel
 
-from hubble.core.engine import AlertEngine
-from hubble.core.models import AlertAnalysis
-from hubble.ingress.base import WebhookNormalizer
-from hubble.model.base import EchoModelProvider, ModelRouter
-from hubble.notifiers.base import ConsoleNotifier, NotifierRegistry
-from hubble.tools.base import ToolRegistry
+from hubble.alerts.models import Alert
+from hubble.events.models import EventEnvelope
+from hubble.incidents.models import Incident
+from hubble.reasoning.models import Analysis
+from hubble.runtime import HubbleRuntime
 
 app = FastAPI(
     title="Hubble Alert Bot",
-    description="A pluggable AI alert bot runtime.",
+    description="A pluggable AI-native AlertOps runtime.",
     version="0.1.0",
 )
 
-
-def create_engine() -> AlertEngine:
-    model_router = ModelRouter(default_provider=EchoModelProvider())
-
-    tool_registry = ToolRegistry()
-
-    notifier_registry = NotifierRegistry()
-    notifier_registry.register(ConsoleNotifier())
-
-    return AlertEngine(
-        model_router=model_router,
-        tool_registry=tool_registry,
-        notifier_registry=notifier_registry,
-        default_channels=["console"],
-    )
+runtime = HubbleRuntime()
 
 
-engine = create_engine()
+class WebhookResponse(BaseModel):
+    event: EventEnvelope
+    alert: Alert
+    incident: Incident
+    analysis: Analysis
+    duplicate: bool = False
 
 
 @app.get("/healthz")
@@ -43,10 +34,26 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/webhook/{source}", response_model=AlertAnalysis)
-async def receive_webhook(source: str, payload: dict[str, Any]) -> AlertAnalysis:
-    alert = WebhookNormalizer.normalize(source=source, payload=payload)
-    return await engine.handle_alert(alert)
+@app.post("/webhook/{source}", response_model=WebhookResponse)
+async def receive_webhook(source: str, payload: dict[str, Any]) -> WebhookResponse:
+    result = await runtime.ingest_webhook(source, payload)
+    return WebhookResponse(
+        event=result.event,
+        alert=result.alert,
+        incident=result.incident,
+        analysis=result.analysis,
+        duplicate=result.duplicate,
+    )
+
+
+@app.get("/alerts", response_model=list[Alert])
+async def list_alerts() -> list[Alert]:
+    return runtime.alert_lifecycle.list_alerts()
+
+
+@app.get("/incidents", response_model=list[Incident])
+async def list_incidents() -> list[Incident]:
+    return runtime.incident_lifecycle.list_incidents()
 
 
 def main() -> None:

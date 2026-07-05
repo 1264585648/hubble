@@ -1,0 +1,104 @@
+server:
+  host: 0.0.0.0
+  port: 8000
+
+runtime:
+  timezone: Asia/Shanghai
+  dedup_window_seconds: 300
+  default_tool_timeout_seconds: 10
+  enable_model_analysis: true
+  dry_run: true
+
+ingress:
+  webhook:
+    enabled: true
+    endpoints:
+      - name: demo
+        path: /webhook/demo
+        secret_env: HUBBLE_DEMO_WEBHOOK_SECRET
+
+  polling:
+    enabled: false
+    jobs:
+      - name: example-api-health
+        interval_seconds: 60
+        source: internal-api
+        url: https://example.com/health
+        method: GET
+        timeout_seconds: 5
+
+model:
+  router: default
+  providers:
+    - name: echo
+      type: echo
+      enabled: true
+    - name: openai-compatible
+      type: openai_compatible
+      enabled: false
+      base_url_env: HUBBLE_MODEL_BASE_URL
+      api_key_env: HUBBLE_MODEL_API_KEY
+      model_env: HUBBLE_MODEL_NAME
+
+  routing:
+    default_provider: echo
+    rules:
+      - when: severity in ['critical', 'high']
+        provider: openai-compatible
+      - when: severity in ['low', 'info']
+        provider: echo
+
+tools:
+  enabled: true
+  auto_execute_readonly: true
+  require_confirmation_for_dangerous: true
+  registry:
+    - name: query_logs
+      type: http
+      enabled: false
+      description: Query logs from an internal log service.
+      method: POST
+      url_env: HUBBLE_QUERY_LOGS_URL
+      timeout_seconds: 10
+      dangerous: false
+    - name: query_database
+      type: sql
+      enabled: false
+      description: Execute read-only SQL query against a configured database.
+      dsn_env: HUBBLE_DATABASE_DSN
+      timeout_seconds: 10
+      dangerous: false
+
+notifiers:
+  default_channels: [console]
+  channels:
+    - name: console
+      type: console
+      enabled: true
+    - name: feishu-sre
+      type: feishu
+      enabled: false
+      webhook_url_env: HUBBLE_FEISHU_WEBHOOK_URL
+    - name: wecom-sre
+      type: wecom
+      enabled: false
+      webhook_url_env: HUBBLE_WECOM_WEBHOOK_URL
+
+session:
+  enabled: false
+  adapters:
+    - name: cli
+      type: cli
+      enabled: true
+    - name: feishu
+      type: feishu
+      enabled: false
+      app_id_env: HUBBLE_FEISHU_APP_ID
+      app_secret_env: HUBBLE_FEISHU_APP_SECRET
+
+storage:
+  type: memory
+  postgres:
+    dsn_env: HUBBLE_POSTGRES_DSN
+  redis:
+    url_env: HUBBLE_REDIS_URL

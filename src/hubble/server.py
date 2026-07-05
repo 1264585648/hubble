@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from hubble.alerts.models import Alert
 from hubble.events.models import EventEnvelope
 from hubble.incidents.models import Incident
-from hubble.intake.models import IntakeDecision, IntakeRule
+from hubble.intake.models import IntakeDecision, IntakeDryRunRequest, IntakeDryRunResponse, IntakeRule
 from hubble.reasoning.models import Analysis
 from hubble.runtime import HubbleRuntime
 
@@ -72,6 +72,11 @@ async def upsert_intake_rule(rule: IntakeRule) -> IntakeRule:
     return runtime.upsert_intake_rule(rule)
 
 
+@app.post("/intake-rules/dry-run", response_model=IntakeDryRunResponse)
+async def dry_run_intake_rule(request: IntakeDryRunRequest) -> IntakeDryRunResponse:
+    return runtime.dry_run_intake_rule(request)
+
+
 @app.delete("/intake-rules/{rule_id}")
 async def delete_intake_rule(rule_id: str) -> dict[str, bool]:
     deleted = runtime.delete_intake_rule(rule_id)
@@ -92,8 +97,9 @@ async def intake_rules_page() -> str:
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 40px; background: #f7f9fc; color: #172033; }
     h1 { margin-bottom: 8px; }
     .hint { color: #667085; margin-bottom: 24px; }
-    textarea { width: 100%; min-height: 240px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; border: 1px solid #d0d7e2; border-radius: 12px; padding: 16px; box-sizing: border-box; }
-    button { background: #155eef; color: white; border: 0; padding: 10px 16px; border-radius: 10px; margin-top: 12px; cursor: pointer; }
+    textarea { width: 100%; min-height: 220px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; border: 1px solid #d0d7e2; border-radius: 12px; padding: 16px; box-sizing: border-box; }
+    button { background: #155eef; color: white; border: 0; padding: 10px 16px; border-radius: 10px; margin: 12px 8px 12px 0; cursor: pointer; }
+    button.secondary { background: #475467; }
     pre { background: white; border: 1px solid #e4e7ec; border-radius: 12px; padding: 16px; overflow: auto; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
     code { background: #eef4ff; padding: 2px 6px; border-radius: 6px; }
@@ -101,7 +107,7 @@ async def intake_rules_page() -> str:
 </head>
 <body>
   <h1>Hubble 前置规则 / 过滤配置</h1>
-  <div class="hint">规则会在告警进入 Alert Core 之前执行，适合做 drop、tag、rewrite 和低价值告警过滤。</div>
+  <div class="hint">规则会在告警进入 Alert Core 之前执行，适合做 drop、tag、rewrite 和低价值告警过滤。Dry-run 不会创建 Alert / Incident。</div>
   <div class="grid">
     <section>
       <h2>新增 / 更新规则</h2>
@@ -117,16 +123,31 @@ async def intake_rules_page() -> str:
   "reason": "开发环境 low 告警不进入主链路"
 }</textarea>
       <button onclick="saveRule()">保存规则</button>
+      <button class="secondary" onclick="dryRunTempRule()">测试当前规则</button>
+      <h2>样例事件</h2>
+      <textarea id="event">{
+  "source": "demo",
+  "payload": {
+    "title": "dev low alert",
+    "description": "noise",
+    "severity": "low",
+    "labels": {"service": "demo", "env": "dev"}
+  }
+}</textarea>
+      <button class="secondary" onclick="dryRunSavedRules()">使用已保存规则测试事件</button>
       <h2>规则说明</h2>
       <pre>支持 action: allow / drop / tag / rewrite
 支持 match: source, type, subject_contains, data.xxx, labels.xxx, annotations.xxx
 rewrite 可用 set_fields 修改 data 字段
-tag 可用 add_labels 添加标签</pre>
+tag 可用 add_labels 添加标签
+列表中会显示 matched_count / filtered_count / last_matched_at 等统计</pre>
     </section>
     <section>
       <h2>当前规则</h2>
       <button onclick="loadRules()">刷新</button>
       <pre id="rules">Loading...</pre>
+      <h2>Dry-run 结果</h2>
+      <pre id="dryrun">暂无</pre>
     </section>
   </div>
 <script>
@@ -143,6 +164,25 @@ async function saveRule() {
   });
   if (!res.ok) alert(await res.text());
   await loadRules();
+}
+async function dryRunTempRule() {
+  const event = JSON.parse(document.getElementById('event').value);
+  const rule = JSON.parse(document.getElementById('rule').value);
+  const res = await fetch('/intake-rules/dry-run', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({source: event.source || 'dry-run', payload: event.payload || {}, rule})
+  });
+  document.getElementById('dryrun').textContent = JSON.stringify(await res.json(), null, 2);
+}
+async function dryRunSavedRules() {
+  const event = JSON.parse(document.getElementById('event').value);
+  const res = await fetch('/intake-rules/dry-run', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({source: event.source || 'dry-run', payload: event.payload || {}})
+  });
+  document.getElementById('dryrun').textContent = JSON.stringify(await res.json(), null, 2);
 }
 loadRules();
 </script>

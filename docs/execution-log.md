@@ -255,13 +255,62 @@ tests/test_reasoning.py
 README.md
 ```
 
+## 2026-07-05：第四批任务执行
+
+### 已完成任务
+
+```text
+T6.2 Feishu ChannelAdapter
+```
+
+## T6.2 Feishu ChannelAdapter
+
+### 完成内容
+
+- 新增 `FeishuChannelAdapter`。
+- 支持飞书自定义机器人 webhook 推送。
+- 支持 interactive card 消息。
+- 支持 severity 到飞书卡片 header template 的映射。
+- 支持可选 webhook 签名 secret。
+- 支持超时配置。
+- 发送失败会返回结构化 `ChannelSendResult`，不抛出到主链路。
+- 新增 `load_channel_registry_from_file()`。
+- 服务启动时从 `HUBBLE_CONFIG` 加载 ChannelRegistry。
+- YAML 中可配置 `feishu-sre`，Policy DSL 可以通过 `channels: [feishu-sre]` 路由到飞书。
+
+### 配置环境变量
+
+```text
+HUBBLE_FEISHU_WEBHOOK_URL
+HUBBLE_FEISHU_WEBHOOK_SECRET
+```
+
+### 验收结果
+
+- 配置 webhook 后可以构造飞书通道。
+- 发送成功时返回 `ok=true`。
+- 发送失败时返回结构化错误。
+- webhook secret 不会进入日志。
+- README 有配置示例。
+- 测试使用 `httpx.MockTransport`，不访问外网。
+
+## 本轮新增 / 修改文件
+
+```text
+src/hubble/channels/feishu.py
+src/hubble/channels/config.py
+src/hubble/server.py
+configs/hubble.example.yaml
+tests/test_feishu_channel.py
+README.md
+```
+
 ## 当前最近下一批任务
 
 建议继续按以下顺序执行：
 
 ```text
-1. T6.2 Feishu ChannelAdapter
-2. T5.2 HTTP Tool
-3. T5.3 Prometheus Query Tool
-4. T7.1 Storage Interface
+1. T5.2 HTTP Tool
+2. T5.3 Prometheus Query Tool
+3. T7.1 Storage Interface
 ```

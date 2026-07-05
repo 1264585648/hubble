@@ -15,6 +15,7 @@ from hubble.incidents.models import Incident
 from hubble.intake.models import IntakeDecision, IntakeDryRunRequest, IntakeDryRunResponse, IntakeRule
 from hubble.policies.config import load_policy_rules_from_file
 from hubble.policies.service import PolicyEngine
+from hubble.reasoning.config import load_reasoning_service_from_file
 from hubble.reasoning.models import Analysis
 from hubble.runtime import HubbleRuntime
 
@@ -27,6 +28,7 @@ app = FastAPI(
 CONFIG_PATH = os.getenv("HUBBLE_CONFIG", "configs/hubble.example.yaml")
 runtime = HubbleRuntime(
     policy_engine=PolicyEngine(load_policy_rules_from_file(CONFIG_PATH)),
+    reasoning_service=load_reasoning_service_from_file(CONFIG_PATH),
 )
 
 

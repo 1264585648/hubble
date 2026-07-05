@@ -27,6 +27,42 @@ ingress:
         method: GET
         timeout_seconds: 5
 
+intake:
+  enabled: true
+  admin_page:
+    enabled: true
+    path: /admin/intake-rules
+  rules:
+    - name: drop-dev-low-alerts
+      enabled: true
+      priority: 10
+      match:
+        labels.env: dev
+        data.severity: low
+      action: drop
+      reason: 开发环境 low 告警不进入主链路
+
+    - name: tag-payment-alerts
+      enabled: true
+      priority: 20
+      match:
+        labels.service: payment-api
+      action: tag
+      add_labels:
+        owner_team: payment-sre
+        business: payment
+      reason: 给支付服务告警补充路由标签
+
+    - name: rewrite-missing-severity
+      enabled: false
+      priority: 30
+      match:
+        source: demo
+      action: rewrite
+      set_fields:
+        severity: medium
+      reason: 示例：给缺失 severity 的事件补默认值
+
 model:
   router: default
   providers:

@@ -41,7 +41,8 @@ Adapter / Collector
 第一轮重构已经将主链路切到事件驱动 runtime：
 
 ```text
-EventEnvelope
+Adapter
+→ EventEnvelope
 → AlertLifecycleResult
 → Incident
 → PolicyDecision
@@ -52,6 +53,7 @@ EventEnvelope
 已落地模块：
 
 ```text
+src/hubble/adapters     Adapter + GenericWebhookAdapter
 src/hubble/events       EventEnvelope + InMemoryEventBus
 src/hubble/alerts       Alert + AlertLifecycleService
 src/hubble/incidents    Incident + IncidentLifecycleService

@@ -1,252 +1,431 @@
-# Hubble 架构设计
+# Hubble 架构设计 V2
 
-Hubble 是一个通用告警机器人开源项目，定位为 **告警接入 + 大模型分析 + 工具调用 + 多通道推送 + 群聊会话处置** 的统一运行时。
+Hubble 的目标不是做一个“Webhook + LLM + 飞书推送”的简单串联工具，而是做一个面向告警生命周期的 **AI-native AlertOps Runtime**。
 
-## 1. 总体架构
+第一版架构里的五个部分——接入层、模型调度层、工具层、推送层、会话层——方向是对的，但还不够完整。优化后的核心判断是：
 
-```mermaid
-flowchart TD
-    A[告警源] --> B[接入层 Ingress]
-    B --> C[告警核心 Alert Core]
-    C --> D[模型调度层 Model Orchestration]
-    D --> E[工具层 Tool Layer]
-    E --> D
-    D --> F[推送层 Push Layer]
-    F --> G[飞书 / 企微 / 钉钉 / Slack / Webhook]
-    G --> H[会话层 Session Layer]
-    H --> D
-```
+> **告警系统的主干应该是事件、告警和事件组生命周期；大模型是增强分析与处置能力，不应该成为唯一主链路。**
 
-Hubble 将所有输入都归一化为 `AlertEvent`，将模型分析结果归一化为 `AlertAnalysis`，将所有外部操作抽象为 `Tool`，将所有消息发送抽象为 `Notifier`，将所有可交互通道抽象为 `SessionAdapter`。
+这样即使模型不可用，Hubble 仍然可以完成告警接入、去重、分组、路由、静默、升级和推送；模型可用时，再增强摘要、归因、影响面判断和处置建议。
 
-## 2. 接入层：Ingress Layer
+## 1. 参考项目与借鉴点
 
-接入层负责把外部事件变成统一的告警事件。
+| 项目 / 标准 | 可借鉴点 | Hubble 的取舍 |
+| --- | --- | --- |
+| Prometheus Alertmanager | 去重、分组、路由、silence、inhibition、高可用 | 作为告警核心的基础能力，不重复造复杂监控系统 |
+| Grafana OnCall OSS | 值班、路由、升级链、ChatOps、通知偏好 | 参考产品模型；注意其 OSS 仓库已归档，不作为依赖 |
+| Keep | AIOps、去重、抽取、映射、维护窗口、服务拓扑、工作流、Provider | 重点参考 AIOps 结构；Hubble 差异化走 ChatOps-first + Agentic 工具调用 |
+| StackStorm | sensors、triggers、actions、rules、workflows、packs、audit trail | 工具与自动化层重点参考，尤其是“触发器 → 规则 → 动作/工作流” |
+| CloudEvents | 通用事件信封 | 作为内部 EventEnvelope 设计参考，降低接入源差异 |
+| OpenTelemetry | 日志、指标、链路追踪的统一相关性 | 工具层查询日志/指标/trace 时参考其语义和关联方式 |
+| LangGraph | 长运行、有状态、human-in-the-loop agent | 后期可作为会话处置和多步推理的可选 Agent Runtime |
 
-### 支持方式
-
-- **Webhook 接入**：Prometheus Alertmanager、Grafana、Sentry、自研监控平台、CI/CD 系统等。
-- **轮询任务接入**：定时查询数据库、HTTP API、日志平台、云厂商接口等。
-- **自定义数据源插件**：用户实现 `Ingress` 接口即可接入任意来源。
-
-### 职责边界
-
-接入层只做三件事：
-
-1. 接收原始数据。
-2. 解析并归一化为 `AlertEvent`。
-3. 交给核心引擎处理。
-
-接入层不直接调用模型、不直接发消息、不直接执行工具，避免逻辑散落。
-
-## 3. 告警核心：Alert Core
-
-告警核心是 Hubble 的事件处理中心。
-
-### 核心能力
-
-- **归一化**：统一字段、时间、标签、来源。
-- **指纹生成**：根据 source、title、labels 等生成稳定 fingerprint。
-- **去重**：同一 fingerprint 在窗口期内合并。
-- **聚合**：多个相关告警合并为一个 incident。
-- **抑制**：维护窗口、已知问题、低价值告警可被抑制。
-- **升级**：高严重级别或长时间未恢复的告警升级推送。
-- **生命周期管理**：firing、acknowledged、resolved、suppressed。
-
-### 推荐数据模型
+## 2. 优化后的总体架构
 
 ```text
-AlertEvent
+┌──────────────────────────────────────────────────────────────────────┐
+│                           Interface Layer                            │
+│     Web UI / CLI / REST API / Feishu / WeCom / Slack / Web Chat       │
+└───────────────────────────────▲──────────────────────────────────────┘
+                                │
+┌───────────────────────────────┴──────────────────────────────────────┐
+│                Notification & Conversation Layer                      │
+│       推送、线程回复、群聊监听、命令、人工确认、通知偏好                  │
+└───────────────────────────────▲──────────────────────────────────────┘
+                                │
+┌───────────────────────────────┴──────────────────────────────────────┐
+│                    Reasoning & Agent Layer                            │
+│       LLM 分析、RAG、工具规划、多轮上下文、结构化输出、置信度             │
+└───────────────────────────────▲──────────────────────────────────────┘
+                                │
+┌───────────────────────────────┴──────────────────────────────────────┐
+│                    Tool & Action Runtime                              │
+│       查日志、查指标、查 Trace、查 DB、查发布、查知识库、执行动作          │
+└───────────────────────────────▲──────────────────────────────────────┘
+                                │
+┌───────────────────────────────┴──────────────────────────────────────┐
+│                    Workflow & Policy Engine                           │
+│       规则、升级链、抑制、静默、审批、自动化编排、危险动作拦截             │
+└───────────────────────────────▲──────────────────────────────────────┘
+                                │
+┌───────────────────────────────┴──────────────────────────────────────┐
+│                 Alert / Incident Lifecycle Core                       │
+│       归一化、指纹、去重、分组、关联、状态机、事件组、生命周期             │
+└───────────────────────────────▲──────────────────────────────────────┘
+                                │
+┌───────────────────────────────┴──────────────────────────────────────┐
+│                    Event Bus & Job Runtime                            │
+│       队列、定时任务、重试、限流、幂等、死信队列、异步 Worker              │
+└───────────────────────────────▲──────────────────────────────────────┘
+                                │
+┌───────────────────────────────┴──────────────────────────────────────┐
+│                    Adapter / Collector Layer                          │
+│       Webhook、Polling、Prometheus、Grafana、Sentry、云厂商、自定义源      │
+└──────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────┐
+│                    Storage / Audit / Observability                    │
+│       PostgreSQL、Redis、对象存储、审计日志、Metrics、Trace、回放          │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+## 3. 为什么这样调整
+
+### 3.1 接入层不应该直接连模型
+
+原来的链路容易变成：
+
+```text
+Webhook → LLM → Tool → Push
+```
+
+这个链路演示很快，但长期会有问题：
+
+- 模型失败时，整个告警链路不可用。
+- 无法很好做去重、聚合、静默、升级。
+- 多个告警无法沉淀为 incident。
+- 群聊追问缺少可绑定的生命周期对象。
+
+优化后应该是：
+
+```text
+Event → Alert → Incident → Policy / Workflow → Reasoning → Notification / Conversation
+```
+
+模型只是其中一个可插拔能力，而不是全部。
+
+### 3.2 “推送层”和“会话层”应该合并为交互层
+
+飞书、企微、Slack 既能推送，也能接收用户回复。它们不应该被拆成两个完全独立系统，而应该抽象为：
+
+```text
+ChannelAdapter
+├── send(notification)
+├── reply(thread, message)
+├── listen(handler)
+└── parse_command(message)
+```
+
+对于只能发不能回的渠道，比如普通 Webhook，可以只实现 `send`。对于飞书、企微、Slack，可以同时实现 `send + listen + reply`。
+
+### 3.3 工具层要分成 Tool 和 Action
+
+不是所有“工具调用”风险都一样。
+
+建议拆成：
+
+```text
+Tool      = 只读查询，如查日志、查指标、查 DB、查知识库
+Action    = 有副作用操作，如重启服务、扩容、回滚、创建工单、静默告警
+Workflow  = 多个 Tool / Action 的编排
+```
+
+默认策略：
+
+- 只读 Tool 可以自动执行。
+- Action 默认需要人工确认。
+- 高危 Action 必须二次确认 + RBAC + 审计。
+- 所有 Tool / Action 都必须有超时、参数 schema、脱敏和执行记录。
+
+### 3.4 增加 Workflow & Policy Engine
+
+这是原架构缺失但非常关键的一层。
+
+它负责：
+
+- 告警路由：哪个团队、哪个群、哪个值班人。
+- 告警抑制：主故障存在时抑制从属故障。
+- 静默窗口：发布窗口、维护窗口、已知问题。
+- 升级链：未确认多久后升级给谁。
+- 自动处置：满足条件时执行只读诊断或低风险动作。
+- 人工确认：危险动作前让群里负责人确认。
+
+规则示例：
+
+```yaml
+rules:
+  - name: critical-payment-alert
+    when:
+      labels.service: payment-api
+      severity: critical
+    group_by: [service, env, region]
+    route_to: [feishu-payment-sre]
+    enrich:
+      - query_recent_deployments
+      - query_error_logs
+      - query_prometheus_metrics
+    require_ai_analysis: true
+    escalation:
+      after: 10m
+      to: [feishu-sre-leads]
+```
+
+## 4. 核心数据模型
+
+### 4.1 EventEnvelope
+
+所有外部输入先进入统一事件信封。这里参考 CloudEvents，但不强制用户使用 CloudEvents。
+
+```text
+EventEnvelope
+├── id
+├── source
+├── type
+├── subject
+├── time
+├── data
+├── datacontenttype
+├── trace_id
+├── tenant_id
+└── extensions
+```
+
+### 4.2 Alert
+
+Alert 是单条告警对象。
+
+```text
+Alert
 ├── id
 ├── source
 ├── title
 ├── description
 ├── severity
-├── status
+├── status                 # firing / resolved / acknowledged / suppressed
 ├── labels
 ├── annotations
+├── fingerprint
 ├── starts_at
 ├── ends_at
-├── fingerprint
-└── raw
+├── raw_event_id
+└── incident_id
 ```
 
-## 4. 模型调度层：Model Orchestration Layer
+### 4.3 Incident
 
-模型调度层负责让大模型“理解告警”，但不让业务逻辑直接依赖某一家模型服务。
-
-### 核心组件
-
-- **ModelProvider**：适配不同模型服务，如 OpenAI-compatible API、本地模型、私有模型网关。
-- **ModelRouter**：根据告警类型、成本、上下文长度、可靠性选择模型。
-- **PromptTemplate**：不同任务使用不同 Prompt，如摘要、根因分析、影响面判断、处置建议。
-- **ContextBuilder**：拼接告警、历史事件、日志摘要、监控指标、知识库内容。
-- **StructuredOutputParser**：将模型结果解析为 `AlertAnalysis`。
-- **AuditLogger**：记录模型输入输出，便于回放和排查。
-
-### 模型输出建议
-
-模型输出不应该只是一段自然语言，而应该包含：
+Incident 是一组相关 Alert 的聚合对象。Hubble 真正应该围绕 Incident 做会话和处置。
 
 ```text
-AlertAnalysis
-├── summary              # 一句话说明发生了什么
-├── severity             # 模型判断的严重级别
-├── possible_causes      # 可能原因
-├── impact               # 影响范围
-├── recommended_actions  # 处置建议
-├── tool_requests        # 希望调用的工具
-├── confidence           # 置信度
-└── raw_response         # 原始模型输出
+Incident
+├── id
+├── title
+├── severity
+├── status                 # open / investigating / mitigated / resolved
+├── alert_fingerprints
+├── affected_services
+├── owner_team
+├── timeline
+├── current_summary
+├── last_analysis_id
+└── created_at / updated_at / resolved_at
 ```
 
-## 5. 工具层：Tool Layer
+### 4.4 Analysis
 
-工具层让模型可以获取更多上下文，而不是只根据告警文本瞎猜。
+模型分析结果必须结构化，不能只存一段自然语言。
 
-### 典型工具
+```text
+Analysis
+├── id
+├── alert_id / incident_id
+├── summary
+├── severity_assessment
+├── possible_causes
+├── impact
+├── evidence
+├── recommended_actions
+├── requested_tools
+├── confidence
+├── model_provider
+├── prompt_version
+└── raw_response
+```
 
-- 查日志：Loki、Elasticsearch、ClickHouse、CloudWatch、自研日志平台。
-- 查数据库：MySQL、PostgreSQL、Redis、MongoDB。
-- 查监控：Prometheus、Grafana、云监控。
-- 查接口：内部 HTTP API、服务健康检查。
-- 查发布：GitHub、GitLab、CI/CD、Kubernetes Event。
-- 查知识库：Runbook、故障复盘、值班手册、Notion、Confluence。
+### 4.5 Execution
 
-### 安全原则
+每一次工具、动作、工作流执行都要记录。
 
-- 默认只开放只读工具。
-- 每个工具必须有超时、权限、参数校验和审计日志。
-- 写操作必须标记为 `dangerous=true`，默认需要人工确认。
-- 模型只能“请求调用工具”，真正执行由 Hubble 的安全执行器决定。
+```text
+Execution
+├── id
+├── type                   # tool / action / workflow
+├── name
+├── params
+├── status                 # pending / running / succeeded / failed / blocked
+├── requested_by           # model / user / rule
+├── approved_by
+├── result
+├── elapsed_ms
+└── audit_metadata
+```
 
-## 6. 推送层：Push Layer
+## 5. 关键运行链路
 
-推送层负责把分析结果发送到人能看到的地方。
+### 5.1 告警进入链路
 
-### 支持通道
+```mermaid
+sequenceDiagram
+    participant Source as Alert Source
+    participant Adapter as Adapter / Collector
+    participant Bus as Event Bus
+    participant Core as Alert Core
+    participant Policy as Workflow & Policy
+    participant Agent as Reasoning Layer
+    participant Tool as Tool Runtime
+    participant Channel as Channel Adapter
 
-- 飞书机器人。
-- 企业微信机器人。
-- 钉钉机器人。
-- Slack。
-- Email。
+    Source->>Adapter: Webhook / Polling / API Event
+    Adapter->>Bus: EventEnvelope
+    Bus->>Core: Normalize Event
+    Core->>Core: Fingerprint / Dedup / Group / Incident State
+    Core->>Policy: Match Rules
+    Policy->>Tool: Run readonly enrichment tools
+    Tool-->>Policy: Evidence
+    Policy->>Agent: Analyze Alert / Incident
+    Agent-->>Policy: Structured Analysis
+    Policy->>Channel: Send Notification
+```
+
+### 5.2 群聊追问链路
+
+```mermaid
+sequenceDiagram
+    participant User as User
+    participant Channel as Channel Adapter
+    participant Core as Incident Core
+    participant Agent as Reasoning Layer
+    participant Tool as Tool Runtime
+
+    User->>Channel: 群里追问 / command
+    Channel->>Core: Bind thread to Incident
+    Core->>Agent: Question + Incident Context
+    Agent->>Tool: Optional readonly tool calls
+    Tool-->>Agent: Evidence
+    Agent-->>Channel: Answer / Action Proposal
+    Channel-->>User: Reply in thread
+```
+
+### 5.3 危险动作链路
+
+```mermaid
+sequenceDiagram
+    participant Agent as Reasoning Layer
+    participant Policy as Policy Engine
+    participant User as Human Approver
+    participant Action as Action Runtime
+    participant Audit as Audit Log
+
+    Agent->>Policy: Propose dangerous action
+    Policy->>User: Request confirmation
+    User-->>Policy: Approve / Reject
+    Policy->>Action: Execute if approved
+    Action-->>Policy: Result
+    Policy->>Audit: Record full execution
+```
+
+## 6. 模块拆分建议
+
+```text
+src/hubble/
+├── adapters/              # 外部系统适配器：Webhook、飞书、企微、Slack、Sentry 等
+├── events/                # EventEnvelope、事件总线、重试、死信队列
+├── alerts/                # Alert 归一化、指纹、去重、状态机
+├── incidents/             # Incident 聚合、时间线、生命周期
+├── policies/              # 路由、静默、抑制、升级、审批策略
+├── workflows/             # 多步编排，参考 StackStorm rules/workflows
+├── reasoning/             # LLM、Prompt、RAG、结构化输出、Agent Runtime
+├── tools/                 # 只读工具
+├── actions/               # 有副作用动作
+├── channels/              # 推送 + 会话统一适配器
+├── storage/               # PostgreSQL、Redis、内存实现
+├── audit/                 # 模型调用、工具调用、动作执行审计
+└── server.py
+```
+
+第一版代码可以继续保留当前简单结构，但后续建议从 `notifiers/session/ingress` 逐步迁移到 `adapters/events/channels`，这样抽象会更稳。
+
+## 7. MVP 应该怎么收敛
+
+不要一开始就做完整平台。建议 Hubble MVP 只做 4 条闭环：
+
+### MVP-1：稳定告警入口
+
 - 通用 Webhook。
+- Prometheus Alertmanager parser。
+- Alert fingerprint。
+- 简单 dedup。
+- Console / Feishu 推送。
 
-### 消息结构
+### MVP-2：AI 分析闭环
 
-推荐分为四块：
+- OpenAI-compatible model provider。
+- Prompt versioning。
+- Structured Analysis。
+- 模型失败 fallback。
 
-1. **发生了什么**：一句话摘要。
-2. **严重程度**：来源级别 + 模型判断级别。
-3. **可能原因与影响**：简洁列出。
-4. **建议动作**：可执行的下一步。
+### MVP-3：工具增强闭环
 
-## 7. 会话层：Session Layer
+- HTTP tool。
+- Prometheus query tool。
+- Loki / Elasticsearch log query tool。
+- 工具结果脱敏。
+- 工具调用审计。
 
-会话层解决“告警发出去之后还能继续问”的问题。
+### MVP-4：ChatOps 闭环
 
-### 典型对话
+- 飞书群消息监听。
+- thread ↔ incident 绑定。
+- `/explain`、`/logs 10m`、`/ack`、`/silence 30m`。
+- 危险动作只提出建议，不自动执行。
 
-- “这个告警影响哪些服务？”
-- “查一下最近 10 分钟 payment 服务日志。”
-- “和上次故障像不像？”
-- “生成一个临时处理方案。”
-- “把这个告警标记为已确认。”
+## 8. 推荐技术选型
 
-### 会话设计
+### 单体开发模式
 
-每条群聊消息需要绑定上下文：
-
-```text
-SessionMessage
-├── channel
-├── thread_id
-├── sender_id
-├── text
-├── alert_id
-├── incident_id
-└── metadata
-```
-
-会话层不直接处理业务，而是把用户问题转成带上下文的模型请求，再由模型调度层和工具层完成回答。
-
-## 8. 事件处理链路
-
-### 告警进入链路
-
-```mermaid
-sequenceDiagram
-    participant S as Alert Source
-    participant I as Ingress
-    participant C as Alert Core
-    participant M as Model Router
-    participant T as Tool Registry
-    participant P as Push Layer
-
-    S->>I: Webhook / Polling Payload
-    I->>C: AlertEvent
-    C->>C: Normalize / Fingerprint / Deduplicate
-    C->>M: Analyze Alert
-    M->>T: Optional Tool Calls
-    T-->>M: Tool Results
-    M-->>C: AlertAnalysis
-    C->>P: Notification
-    P-->>S: Optional Ack
-```
-
-### 群聊追问链路
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant S as Session Adapter
-    participant M as Model Router
-    participant T as Tool Registry
-    participant P as Push Layer
-
-    U->>S: 群聊追问
-    S->>M: SessionMessage + Alert Context
-    M->>T: Tool Request
-    T-->>M: Tool Result
-    M-->>S: Answer
-    S->>P: Reply Message
-```
-
-## 9. 部署形态
-
-### 单体模式
-
-适合早期和个人使用：
+适合开源早期：
 
 ```text
-FastAPI + APScheduler + SQLite/PostgreSQL + Redis optional
+FastAPI + APScheduler + PostgreSQL/SQLite + Redis optional + Pydantic
 ```
 
-### 分布式模式
+### 可扩展部署模式
 
 适合企业内部：
 
 ```text
-API Server + Worker + Queue + PostgreSQL + Redis + Object Storage
+API Server + Worker + Event Bus + PostgreSQL + Redis + Object Storage
 ```
 
-后续可扩展：
+### 事件总线选择
 
-- Docker Compose。
-- Kubernetes Deployment。
-- Helm Chart。
-- Prometheus Metrics。
-- OpenTelemetry Trace。
+- 单机 / MVP：内存队列或 Redis Streams。
+- 企业部署：NATS / Kafka / RabbitMQ 任选其一。
+- Kubernetes 场景：后续可考虑 CloudEvents / Knative Eventing 兼容。
 
-## 10. MVP 范围
+## 9. Hubble 的定位差异
 
-第一版不要追求全自动闭环，重点做出可靠的“AI 告警分析助手”：
+Hubble 不建议直接做成 Keep 的复制品，也不建议做成 Alertmanager 的 Python 版。
 
-1. Webhook 接入。
-2. 统一告警模型。
-3. 模型摘要与建议。
-4. 工具接口和一个示例工具。
-5. 飞书/企微推送。
-6. CLI 会话 Demo。
-7. 配置文件驱动。
+更好的定位是：
+
+> **面向中文团队和 ChatOps 场景的 AI 告警分析与处置助手。**
+
+核心差异：
+
+- 比 Alertmanager 更懂上下文和会话。
+- 比传统 OnCall 工具更轻量。
+- 比通用 Agent 框架更聚焦告警场景。
+- 比 AIOps 大平台更容易本地部署和二次开发。
+
+## 10. 后续实现优先级
+
+```text
+P0: EventEnvelope + Alert fingerprint + Webhook parser
+P1: Alertmanager-compatible grouping / silence / inhibition 简化版
+P2: Feishu ChannelAdapter：推送 + 回复 + 命令
+P3: OpenAI-compatible ReasoningProvider + Structured Analysis
+P4: Tool Runtime：Prometheus / Logs / HTTP / Runbook
+P5: Incident Core：alert group、timeline、thread binding
+P6: Policy Engine：routing、escalation、approval
+P7: Workflow Engine：多步诊断和半自动处置
+```

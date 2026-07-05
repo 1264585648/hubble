@@ -63,6 +63,7 @@ class AlertLifecycleService:
         )
         severity = str(payload.get("severity") or labels.get("severity") or "unknown")
         status = str(payload.get("status") or "firing")
+        fingerprint = payload.get("fingerprint")
 
         return Alert(
             source=event.source,
@@ -72,6 +73,7 @@ class AlertLifecycleService:
             status=status if status in VALID_STATUSES else "firing",
             labels=labels,
             annotations=annotations,
+            fingerprint=str(fingerprint) if fingerprint else None,
             raw_event_id=event.id,
             raw=payload,
         )

@@ -25,7 +25,7 @@ class GenericWebhookAdapter(Adapter):
             or raw.get("name")
         )
         return EventEnvelope(
-            type="alert.ingested",
+            type="alert.received",
             source=self.name,
             subject=str(subject) if subject else None,
             data=raw,

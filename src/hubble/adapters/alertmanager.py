@@ -38,7 +38,9 @@ class AlertmanagerWebhookAdapter(Adapter):
                     source=self.name,
                     subject=_subject(common_labels, raw),
                     data={
-                        "title": _subject(common_labels, raw) or "Alertmanager notification",
+                        "title": (
+                            _subject(common_labels, raw) or "Alertmanager notification"
+                        ),
                         "description": _description(common_annotations),
                         "severity": common_labels.get("severity", "unknown"),
                         "status": str(raw.get("status") or "firing"),
@@ -56,7 +58,10 @@ class AlertmanagerWebhookAdapter(Adapter):
                 continue
 
             labels = {**common_labels, **_string_dict(item.get("labels") or {})}
-            annotations = {**common_annotations, **_string_dict(item.get("annotations") or {})}
+            annotations = {
+                **common_annotations,
+                **_string_dict(item.get("annotations") or {}),
+            }
             title = labels.get("alertname") or raw.get("receiver") or "Alertmanager alert"
 
             events.append(

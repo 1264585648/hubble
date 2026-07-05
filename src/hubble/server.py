@@ -38,6 +38,26 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/webhook/alertmanager/{source}", response_model=list[WebhookResponse])
+async def receive_alertmanager_webhook(
+    source: str,
+    payload: dict[str, Any],
+) -> list[WebhookResponse]:
+    results = await runtime.ingest_alertmanager_webhook(source, payload)
+    return [
+        WebhookResponse(
+            event=result.event,
+            intake=result.intake,
+            alert=result.alert,
+            incident=result.incident,
+            analysis=result.analysis,
+            duplicate=result.duplicate,
+            filtered=result.filtered,
+        )
+        for result in results
+    ]
+
+
 @app.post("/webhook/{source}", response_model=WebhookResponse)
 async def receive_webhook(source: str, payload: dict[str, Any]) -> WebhookResponse:
     result = await runtime.ingest_webhook(source, payload)

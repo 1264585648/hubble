@@ -33,6 +33,67 @@ def test_webhook_demo() -> None:
     assert "payment-api error rate is high" in body["analysis"]["summary"]
 
 
+def test_alertmanager_webhook_batch() -> None:
+    response = client.post(
+        "/webhook/alertmanager/prometheus",
+        json={
+            "receiver": "hubble-demo",
+            "status": "firing",
+            "alerts": [
+                {
+                    "status": "firing",
+                    "labels": {
+                        "alertname": "HighErrorRate",
+                        "service": "payment-api",
+                        "env": "prod",
+                        "severity": "critical",
+                    },
+                    "annotations": {
+                        "summary": "payment-api error rate is high",
+                        "description": "HTTP 5xx error rate exceeded 5% for 5 minutes.",
+                    },
+                    "startsAt": "2026-07-05T12:00:00Z",
+                    "endsAt": "0001-01-01T00:00:00Z",
+                    "generatorURL": "https://prometheus.example.com/graph",
+                    "fingerprint": "payment-api-high-error-rate",
+                },
+                {
+                    "status": "resolved",
+                    "labels": {
+                        "alertname": "QueueLatencyHigh",
+                        "service": "order-worker",
+                        "env": "prod",
+                        "severity": "high",
+                    },
+                    "annotations": {
+                        "summary": "order-worker queue latency recovered",
+                        "description": "Queue latency has returned to normal.",
+                    },
+                    "startsAt": "2026-07-05T11:30:00Z",
+                    "endsAt": "2026-07-05T12:05:00Z",
+                    "generatorURL": "https://prometheus.example.com/graph",
+                    "fingerprint": "order-worker-queue-latency",
+                },
+            ],
+            "groupLabels": {"env": "prod"},
+            "commonLabels": {"env": "prod"},
+            "commonAnnotations": {},
+            "externalURL": "https://alertmanager.example.com",
+            "version": "4",
+            "groupKey": "{}:{env=\"prod\"}",
+            "truncatedAlerts": 0,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 2
+    assert body[0]["alert"]["title"] == "HighErrorRate"
+    assert body[0]["alert"]["severity"] == "critical"
+    assert body[0]["alert"]["status"] == "firing"
+    assert body[1]["alert"]["title"] == "QueueLatencyHigh"
+    assert body[1]["alert"]["status"] == "resolved"
+
+
 def test_alerts_and_incidents_are_queryable() -> None:
     alerts_response = client.get("/alerts")
     incidents_response = client.get("/incidents")

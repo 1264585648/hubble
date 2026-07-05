@@ -15,7 +15,7 @@ Hubble V2 的解耦原则：
 所有接入源都必须先实现 Adapter 契约：
 
 ```text
-Adapter.to_event(raw) -> EventEnvelope
+Adapter.to_event(raw) -> EventEnvelope(type="alert.received")
 ```
 
 约束：
@@ -55,7 +55,58 @@ EventEnvelope
 - 主链路必须围绕 EventEnvelope 传递，而不是直接传原始 payload。
 - 未来可以替换为 Redis Streams / NATS / Kafka，而不影响上层。
 
-## 3. Alert Lifecycle Contract
+## 3. Intake Rule Contract
+
+前置规则层位于 Event Bus 和 Alert Core 之间。
+
+输入：
+
+```text
+EventEnvelope(type="alert.received")
+```
+
+输出：
+
+```text
+IntakeDecision
+├── allowed
+├── action              # allow / drop / tag / rewrite
+├── matched_rule_id
+├── matched_rule_name
+├── reason
+└── event
+```
+
+允许进入主链路时：
+
+```text
+EventEnvelope(type="alert.ingested")
+```
+
+被过滤时：
+
+```text
+EventEnvelope(type="alert.filtered")
+```
+
+Intake Rule 只负责：
+
+- drop：丢弃低价值事件，不创建 Alert。
+- allow：允许进入 Alert Core。
+- tag：添加 labels。
+- rewrite：改写 data 字段，例如 severity、labels、annotations。
+- 后续扩展：sample、rate_limit、merge_hint、route_hint。
+
+Intake Rule 不允许：
+
+- 创建 Alert。
+- 创建 Incident。
+- 调模型。
+- 调工具。
+- 发通知。
+- 做升级链和处置编排。
+
+## 4. Alert Lifecycle Contract
 
 输入：
 
@@ -86,7 +137,7 @@ Alert Core 不允许：
 - 发通知
 - 读群聊消息
 
-## 4. Incident Lifecycle Contract
+## 5. Incident Lifecycle Contract
 
 输入：
 
@@ -111,7 +162,7 @@ Incident Core 只负责：
 
 Incident Core 不做策略判断，也不直接推送。
 
-## 5. Policy Decision Contract
+## 6. Policy Decision Contract
 
 输入：
 
@@ -143,11 +194,12 @@ Policy Engine 只决定：
 
 Policy Engine 不负责：
 
-- 具体怎么查日志
-- 具体怎么调用模型
-- 具体怎么发飞书卡片
+- 事件是否应该进入 Alert Core。这是 Intake Rule 的职责。
+- 具体怎么查日志。
+- 具体怎么调用模型。
+- 具体怎么发飞书卡片。
 
-## 6. Reasoning Contract
+## 7. Reasoning Contract
 
 输入：
 
@@ -182,7 +234,7 @@ Analysis
 - Reasoning 不能直接执行危险 Action。
 - 模型失败时必须 fallback。
 
-## 7. Tool / Action Contract
+## 8. Tool / Action Contract
 
 Tool 是只读查询；Action 是有副作用动作。
 
@@ -206,7 +258,7 @@ ActionRequested → ActionApprovalRequired → ActionApproved → ActionExecuted
 - 所有结果必须脱敏。
 - 工具不能知道调用它的是模型、策略还是用户。
 
-## 8. Channel Contract
+## 9. Channel Contract
 
 推送和会话统一为 ChannelAdapter。
 
@@ -227,13 +279,37 @@ ChannelAdapter
 - command parse
 - thread binding
 
-## 9. Runtime Orchestration Contract
+## 10. Rule Config API / Page Contract
+
+前置规则需要有独立配置入口，避免开发者改代码才能过滤噪音。
+
+API：
+
+```text
+GET    /intake-rules
+POST   /intake-rules
+DELETE /intake-rules/{rule_id}
+GET    /admin/intake-rules
+```
+
+规则配置页面职责：
+
+- 查看规则列表。
+- 新增 / 更新 / 删除规则。
+- 启用 / 禁用规则。
+- 配置 match 条件。
+- 配置 action：allow / drop / tag / rewrite。
+- 后续扩展：dry-run、命中统计、样例事件测试、版本发布。
+
+## 11. Runtime Orchestration Contract
 
 Runtime 是薄编排层，只负责把稳定契约串起来：
 
 ```text
 Adapter
-→ EventEnvelope
+→ EventEnvelope(type="alert.received")
+→ IntakeDecision
+→ EventEnvelope(type="alert.ingested") | EventEnvelope(type="alert.filtered")
 → AlertLifecycleResult
 → Incident
 → PolicyDecision
@@ -241,15 +317,16 @@ Adapter
 → ChannelMessage
 ```
 
-Runtime 不应该包含复杂业务规则。复杂规则应该沉入 Policy Engine，复杂推理应该沉入 Reasoning Layer，外部系统差异应该沉入 Adapter / Channel / Tool。
+Runtime 不应该包含复杂业务规则。复杂规则应该沉入 IntakeRuleEngine / PolicyEngine，复杂推理应该沉入 Reasoning Layer，外部系统差异应该沉入 Adapter / Channel / Tool。
 
-## 10. 当前代码落地状态
+## 12. 当前代码落地状态
 
 已落地模块：
 
 ```text
 src/hubble/adapters     Adapter + GenericWebhookAdapter
 src/hubble/events       EventEnvelope + InMemoryEventBus
+src/hubble/intake       IntakeRule + IntakeRuleEngine
 src/hubble/alerts       Alert + AlertLifecycleService
 src/hubble/incidents    Incident + IncidentLifecycleService
 src/hubble/policies     PolicyDecision + PolicyEngine
@@ -261,10 +338,14 @@ src/hubble/runtime.py   Event-driven HubbleRuntime
 当前 API：
 
 ```text
-GET  /healthz
-POST /webhook/{source}
-GET  /alerts
-GET  /incidents
+GET    /healthz
+POST   /webhook/{source}
+GET    /alerts
+GET    /incidents
+GET    /intake-rules
+POST   /intake-rules
+DELETE /intake-rules/{rule_id}
+GET    /admin/intake-rules
 ```
 
 下一步建议：
@@ -276,4 +357,5 @@ GET  /incidents
 4. Feishu ChannelAdapter
 5. Prometheus / Log Tool
 6. Incident thread binding
+7. Intake rule dry-run and hit statistics
 ```

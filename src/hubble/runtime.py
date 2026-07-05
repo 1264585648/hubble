@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from hubble.adapters.alertmanager import AlertmanagerWebhookAdapter
 from hubble.adapters.webhook import GenericWebhookAdapter
 from hubble.alerts.models import Alert
 from hubble.alerts.service import AlertLifecycleService
@@ -60,6 +61,20 @@ class HubbleRuntime:
     async def ingest_webhook(self, source: str, payload: dict[str, Any]) -> AlertPipelineResult:
         adapter = GenericWebhookAdapter(source=source)
         received_event = adapter.to_event(payload)
+        return await self._process_received_event(received_event)
+
+    async def ingest_alertmanager_webhook(
+        self,
+        source: str,
+        payload: dict[str, Any],
+    ) -> list[AlertPipelineResult]:
+        adapter = AlertmanagerWebhookAdapter(source=source)
+        results: list[AlertPipelineResult] = []
+        for received_event in adapter.to_events(payload):
+            results.append(await self._process_received_event(received_event))
+        return results
+
+    async def _process_received_event(self, received_event: EventEnvelope) -> AlertPipelineResult:
         await self.event_bus.publish(received_event)
 
         intake = self.intake_engine.evaluate(received_event)

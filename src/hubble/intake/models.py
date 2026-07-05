@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -28,6 +29,13 @@ class IntakeRule(BaseModel):
     set_fields: dict[str, Any] = Field(default_factory=dict)
     stop_processing: bool = True
 
+    matched_count: int = 0
+    allowed_count: int = 0
+    filtered_count: int = 0
+    tag_count: int = 0
+    rewrite_count: int = 0
+    last_matched_at: datetime | None = None
+
 
 class IntakeDecision(BaseModel):
     """Result of evaluating an EventEnvelope against intake rules."""
@@ -38,3 +46,19 @@ class IntakeDecision(BaseModel):
     matched_rule_name: str | None = None
     reason: str = "default allow"
     event: EventEnvelope
+
+
+class IntakeDryRunRequest(BaseModel):
+    """Request for testing a payload against saved rules or one temporary rule."""
+
+    source: str = "dry-run"
+    payload: dict[str, Any] = Field(default_factory=dict)
+    rule: IntakeRule | None = None
+
+
+class IntakeDryRunResponse(BaseModel):
+    """Dry-run result. It must not create alerts, incidents or publish formal events."""
+
+    decision: IntakeDecision
+    rule: IntakeRule | None = None
+    would_create_alert: bool

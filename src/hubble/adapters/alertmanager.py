@@ -63,6 +63,7 @@ class AlertmanagerWebhookAdapter(Adapter):
                 **_string_dict(item.get("annotations") or {}),
             }
             title = labels.get("alertname") or raw.get("receiver") or "Alertmanager alert"
+            status = str(item.get("status") or raw.get("status") or "firing")
 
             events.append(
                 EventEnvelope(
@@ -73,7 +74,7 @@ class AlertmanagerWebhookAdapter(Adapter):
                         "title": title,
                         "description": _description(annotations),
                         "severity": labels.get("severity", "unknown"),
-                        "status": str(item.get("status") or raw.get("status") or "firing"),
+                        "status": status,
                         "labels": labels,
                         "annotations": annotations,
                         "group_labels": group_labels,

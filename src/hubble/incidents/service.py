@@ -70,11 +70,65 @@ class IncidentLifecycleService:
         alert.incident_id = incident.id
         return incident
 
+    def ack(self, incident_id: str, *, actor: str | None = None) -> Incident | None:
+        incident = self.get(incident_id)
+        if not incident:
+            return None
+        return self._transition(
+            incident,
+            status="investigating",
+            event_type="incident.acknowledged",
+            message=_actor_message("Incident acknowledged", actor),
+        )
+
+    def resolve(self, incident_id: str, *, actor: str | None = None) -> Incident | None:
+        incident = self.get(incident_id)
+        if not incident:
+            return None
+        incident.resolved_at = datetime.now(timezone.utc)
+        return self._transition(
+            incident,
+            status="resolved",
+            event_type="incident.resolved",
+            message=_actor_message("Incident resolved", actor),
+        )
+
+    def reopen(self, incident_id: str, *, actor: str | None = None) -> Incident | None:
+        incident = self.get(incident_id)
+        if not incident:
+            return None
+        incident.resolved_at = None
+        return self._transition(
+            incident,
+            status="open",
+            event_type="incident.reopened",
+            message=_actor_message("Incident reopened", actor),
+        )
+
     def get(self, incident_id: str) -> Incident | None:
         return self._incidents_by_id.get(incident_id)
 
     def list_incidents(self) -> list[Incident]:
         return list(self._incidents_by_id.values())
+
+    def _transition(
+        self,
+        incident: Incident,
+        *,
+        status: str,
+        event_type: str,
+        message: str,
+    ) -> Incident:
+        incident.status = status  # type: ignore[assignment]
+        incident.updated_at = datetime.now(timezone.utc)
+        incident.timeline.append(
+            IncidentTimelineItem(
+                type=event_type,
+                message=message,
+                ref_id=incident.id,
+            )
+        )
+        return incident
 
     def _group_key(self, alert: Alert) -> str:
         parts = [alert.source]
@@ -86,3 +140,9 @@ class IncidentLifecycleService:
 def _affected_services(alert: Alert) -> list[str]:
     service = alert.labels.get("service") or alert.labels.get("service_name")
     return [service] if service else []
+
+
+def _actor_message(message: str, actor: str | None) -> str:
+    if not actor:
+        return message
+    return f"{message} by {actor}"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any
 
 from hubble.events.models import EventEnvelope
@@ -23,13 +24,21 @@ class IntakeRuleEngine:
         return sorted(self._rules.values(), key=lambda item: item.priority)
 
     def upsert_rule(self, rule: IntakeRule) -> IntakeRule:
+        existing = self._rules.get(rule.id)
+        if existing:
+            rule.matched_count = existing.matched_count
+            rule.allowed_count = existing.allowed_count
+            rule.filtered_count = existing.filtered_count
+            rule.tag_count = existing.tag_count
+            rule.rewrite_count = existing.rewrite_count
+            rule.last_matched_at = existing.last_matched_at
         self._rules[rule.id] = rule
         return rule
 
     def delete_rule(self, rule_id: str) -> bool:
         return self._rules.pop(rule_id, None) is not None
 
-    def evaluate(self, event: EventEnvelope) -> IntakeDecision:
+    def evaluate(self, event: EventEnvelope, *, record_stats: bool = True) -> IntakeDecision:
         ingested_event = _mark_ingested(event)
 
         for rule in self.list_rules():
@@ -38,6 +47,8 @@ class IntakeRuleEngine:
 
             rewritten = _apply_rule(rule, ingested_event)
             allowed = rule.action != "drop"
+            if record_stats:
+                _record_match(rule, allowed=allowed)
             return IntakeDecision(
                 allowed=allowed,
                 action=rule.action,
@@ -78,6 +89,21 @@ def _apply_rule(rule: IntakeRule, event: EventEnvelope) -> EventEnvelope:
     extensions["intake_rule_name"] = rule.name
     payload["extensions"] = extensions
     return EventEnvelope(**payload)
+
+
+def _record_match(rule: IntakeRule, *, allowed: bool) -> None:
+    rule.matched_count += 1
+    if allowed:
+        rule.allowed_count += 1
+    else:
+        rule.filtered_count += 1
+
+    if rule.action == "tag":
+        rule.tag_count += 1
+    elif rule.action == "rewrite":
+        rule.rewrite_count += 1
+
+    rule.last_matched_at = datetime.now(timezone.utc)
 
 
 def _matches(match: dict[str, Any], event: EventEnvelope) -> bool:

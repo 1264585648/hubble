@@ -1,0 +1,51 @@
+{
+  "receiver": "hubble-demo",
+  "status": "firing",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "HighErrorRate",
+        "service": "payment-api",
+        "env": "prod",
+        "severity": "critical"
+      },
+      "annotations": {
+        "summary": "payment-api error rate is high",
+        "description": "HTTP 5xx error rate exceeded 5% for 5 minutes."
+      },
+      "startsAt": "2026-07-05T12:00:00Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "https://prometheus.example.com/graph?g0.expr=rate(http_requests_total%7Bstatus%3D~%225..%22%7D%5B5m%5D)",
+      "fingerprint": "payment-api-high-error-rate"
+    },
+    {
+      "status": "resolved",
+      "labels": {
+        "alertname": "QueueLatencyHigh",
+        "service": "order-worker",
+        "env": "prod",
+        "severity": "high"
+      },
+      "annotations": {
+        "summary": "order-worker queue latency recovered",
+        "description": "Queue latency has returned to normal."
+      },
+      "startsAt": "2026-07-05T11:30:00Z",
+      "endsAt": "2026-07-05T12:05:00Z",
+      "generatorURL": "https://prometheus.example.com/graph?g0.expr=queue_latency_seconds",
+      "fingerprint": "order-worker-queue-latency"
+    }
+  ],
+  "groupLabels": {
+    "env": "prod"
+  },
+  "commonLabels": {
+    "env": "prod"
+  },
+  "commonAnnotations": {},
+  "externalURL": "https://alertmanager.example.com",
+  "version": "4",
+  "groupKey": "{}:{env=\"prod\"}",
+  "truncatedAlerts": 0
+}

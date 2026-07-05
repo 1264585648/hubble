@@ -205,14 +205,63 @@ tests/test_policy.py
 README.md
 ```
 
+## 2026-07-05：第三批任务执行
+
+### 已完成任务
+
+```text
+T4.3 OpenAI-compatible Provider
+```
+
+## T4.3 OpenAI-compatible Provider
+
+### 完成内容
+
+- 新增 `OpenAICompatibleReasoningService`。
+- 保留 `ReasoningService` 作为 Echo fallback。
+- 支持调用 OpenAI-compatible `/chat/completions`。
+- 请求中使用 `response_format: {type: json_object}`。
+- 模型输出会解析为结构化 `Analysis`。
+- 新增 `load_reasoning_service_from_file()`。
+- 服务启动时读取 `HUBBLE_CONFIG` 并加载模型 provider。
+- 配置启用但环境变量不完整时自动使用 Echo。
+- 模型异常、超时、响应结构异常或 JSON 解析失败时自动回退 Echo。
+
+### 配置环境变量
+
+```text
+HUBBLE_MODEL_BASE_URL
+HUBBLE_MODEL_API_KEY
+HUBBLE_MODEL_NAME
+```
+
+### 验收结果
+
+- 环境变量配置后可构造 OpenAI-compatible provider。
+- 模型返回可以解析成 `Analysis`。
+- 模型失败时 fallback 到 Echo。
+- 请求超时 / 响应异常不阻塞主链路。
+- 不在日志中输出 API Key。
+- 测试使用 `httpx.MockTransport`，不访问外网。
+
+## 本轮新增 / 修改文件
+
+```text
+src/hubble/reasoning/service.py
+src/hubble/reasoning/config.py
+src/hubble/server.py
+configs/hubble.example.yaml
+tests/test_reasoning.py
+README.md
+```
+
 ## 当前最近下一批任务
 
 建议继续按以下顺序执行：
 
 ```text
-1. T4.3 OpenAI-compatible Provider
-2. T6.2 Feishu ChannelAdapter
-3. T5.2 HTTP Tool
-4. T5.3 Prometheus Query Tool
-5. T7.1 Storage Interface
+1. T6.2 Feishu ChannelAdapter
+2. T5.2 HTTP Tool
+3. T5.3 Prometheus Query Tool
+4. T7.1 Storage Interface
 ```

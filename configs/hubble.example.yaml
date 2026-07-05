@@ -155,6 +155,8 @@ notifiers:
       type: feishu
       enabled: false
       webhook_url_env: HUBBLE_FEISHU_WEBHOOK_URL
+      secret_env: HUBBLE_FEISHU_WEBHOOK_SECRET
+      timeout_seconds: 10
     - name: wecom-sre
       type: wecom
       enabled: false

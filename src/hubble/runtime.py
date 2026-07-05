@@ -13,7 +13,12 @@ from hubble.events.bus import InMemoryEventBus
 from hubble.events.models import EventEnvelope
 from hubble.incidents.models import Incident
 from hubble.incidents.service import IncidentLifecycleService
-from hubble.intake.models import IntakeDecision, IntakeDryRunRequest, IntakeDryRunResponse, IntakeRule
+from hubble.intake.models import (
+    IntakeDecision,
+    IntakeDryRunRequest,
+    IntakeDryRunResponse,
+    IntakeRule,
+)
 from hubble.intake.service import IntakeRuleEngine
 from hubble.policies.models import PolicyDecision
 from hubble.policies.service import PolicyEngine

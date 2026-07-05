@@ -104,6 +104,55 @@ def test_alerts_and_incidents_are_queryable() -> None:
     assert isinstance(incidents_response.json(), list)
 
 
+def test_incident_state_transition_api() -> None:
+    create_response = client.post(
+        "/webhook/state-transition-demo",
+        json={
+            "title": "checkout latency is high",
+            "description": "p95 latency exceeded threshold.",
+            "severity": "critical",
+            "labels": {"service": "checkout-api", "env": "prod"},
+        },
+    )
+    assert create_response.status_code == 200
+    incident_id = create_response.json()["incident"]["id"]
+
+    ack_response = client.post(
+        f"/incidents/{incident_id}/ack",
+        json={"actor": "alice"},
+    )
+    assert ack_response.status_code == 200
+    acked = ack_response.json()
+    assert acked["status"] == "investigating"
+    assert acked["timeline"][-1]["type"] == "incident.acknowledged"
+    assert "alice" in acked["timeline"][-1]["message"]
+
+    resolve_response = client.post(
+        f"/incidents/{incident_id}/resolve",
+        json={"actor": "alice"},
+    )
+    assert resolve_response.status_code == 200
+    resolved = resolve_response.json()
+    assert resolved["status"] == "resolved"
+    assert resolved["resolved_at"] is not None
+    assert resolved["timeline"][-1]["type"] == "incident.resolved"
+
+    reopen_response = client.post(
+        f"/incidents/{incident_id}/reopen",
+        json={"actor": "bob"},
+    )
+    assert reopen_response.status_code == 200
+    reopened = reopen_response.json()
+    assert reopened["status"] == "open"
+    assert reopened["resolved_at"] is None
+    assert reopened["timeline"][-1]["type"] == "incident.reopened"
+
+
+def test_incident_transition_not_found() -> None:
+    response = client.post("/incidents/not-found/ack", json={"actor": "alice"})
+    assert response.status_code == 404
+
+
 def test_intake_rule_can_filter_alerts() -> None:
     rule_response = client.post(
         "/intake-rules",

@@ -136,30 +136,36 @@ class HubbleRuntime:
 
         incident = self.incident_lifecycle.attach_alert(alert)
         policy = self.policy_engine.evaluate(alert, incident)
-        analysis = await self.reasoning_service.analyze(
-            alert=alert,
-            incident=incident,
-            policy=policy,
-        )
-        incident.current_summary = analysis.summary
-        incident.last_analysis_id = analysis.id
+        analysis: Analysis | None = None
+
+        if policy.should_analyze:
+            analysis = await self.reasoning_service.analyze(
+                alert=alert,
+                incident=incident,
+                policy=policy,
+            )
+            incident.current_summary = analysis.summary
+            incident.last_analysis_id = analysis.id
 
         if policy.should_notify and not lifecycle_result.is_duplicate:
-            await self.channel_registry.send(
-                _build_channel_message(alert, incident, analysis),
-                channels=policy.channels,
+            message = (
+                _build_channel_message(alert, incident, analysis)
+                if analysis
+                else _build_basic_channel_message(alert, incident)
             )
+            await self.channel_registry.send(message, channels=policy.channels)
 
-        await self.event_bus.publish(
-            EventEnvelope(
-                type="analysis.finished",
-                source="hubble.reasoning",
-                subject=analysis.incident_id,
-                data=analysis.model_dump(mode="json"),
-                trace_id=event.trace_id,
-                tenant_id=event.tenant_id,
+        if analysis:
+            await self.event_bus.publish(
+                EventEnvelope(
+                    type="analysis.finished",
+                    source="hubble.reasoning",
+                    subject=analysis.incident_id,
+                    data=analysis.model_dump(mode="json"),
+                    trace_id=event.trace_id,
+                    tenant_id=event.tenant_id,
+                )
             )
-        )
 
         return AlertPipelineResult(
             event=event,
@@ -194,7 +200,11 @@ class HubbleRuntime:
         )
 
 
-def _build_channel_message(alert: Alert, incident: Incident, analysis: Analysis) -> ChannelMessage:
+def _build_channel_message(
+    alert: Alert,
+    incident: Incident,
+    analysis: Analysis,
+) -> ChannelMessage:
     causes = "\n".join(f"- {item}" for item in analysis.possible_causes) or "- 暂无"
     actions = "\n".join(f"- {item}" for item in analysis.recommended_actions) or "- 暂无"
 
@@ -220,5 +230,24 @@ def _build_channel_message(alert: Alert, incident: Incident, analysis: Analysis)
             "source": alert.source,
             "fingerprint": alert.fingerprint,
             "analysis_id": analysis.id,
+        },
+    )
+
+
+def _build_basic_channel_message(alert: Alert, incident: Incident) -> ChannelMessage:
+    return ChannelMessage(
+        title=f"[{alert.severity.upper()}] {alert.title}",
+        body=(
+            f"## 发生了什么\n{alert.description or alert.title}\n\n"
+            f"## Incident\n{incident.id}\n\n"
+            f"## 严重程度\n{alert.severity}\n\n"
+            f"## 元信息\nsource={alert.source}\nfingerprint={alert.fingerprint}"
+        ),
+        severity=alert.severity,
+        incident_id=incident.id,
+        alert_id=alert.id,
+        metadata={
+            "source": alert.source,
+            "fingerprint": alert.fingerprint,
         },
     )

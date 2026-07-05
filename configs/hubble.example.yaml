@@ -16,6 +16,10 @@ ingress:
       - name: demo
         path: /webhook/demo
         secret_env: HUBBLE_DEMO_WEBHOOK_SECRET
+      - name: prometheus
+        type: alertmanager
+        path: /webhook/alertmanager/prometheus
+        secret_env: HUBBLE_ALERTMANAGER_WEBHOOK_SECRET
 
   polling:
     enabled: false
@@ -29,6 +33,12 @@ ingress:
 
 intake:
   enabled: true
+  dry_run:
+    enabled: true
+    path: /intake-rules/dry-run
+  stats:
+    enabled: true
+    returned_by: /intake-rules
   admin_page:
     enabled: true
     path: /admin/intake-rules

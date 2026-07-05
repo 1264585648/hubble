@@ -12,7 +12,7 @@ from hubble.events.bus import InMemoryEventBus
 from hubble.events.models import EventEnvelope
 from hubble.incidents.models import Incident
 from hubble.incidents.service import IncidentLifecycleService
-from hubble.intake.models import IntakeDecision, IntakeRule
+from hubble.intake.models import IntakeDecision, IntakeDryRunRequest, IntakeDryRunResponse, IntakeRule
 from hubble.intake.service import IntakeRuleEngine
 from hubble.policies.models import PolicyDecision
 from hubble.policies.service import PolicyEngine
@@ -87,6 +87,17 @@ class HubbleRuntime:
 
         await self.event_bus.publish(intake.event)
         return await self.process_alert_event(intake.event, intake=intake)
+
+    def dry_run_intake_rule(self, request: IntakeDryRunRequest) -> IntakeDryRunResponse:
+        adapter = GenericWebhookAdapter(source=request.source)
+        event = adapter.to_event(request.payload)
+        engine = IntakeRuleEngine([request.rule]) if request.rule else self.intake_engine
+        decision = engine.evaluate(event, record_stats=False)
+        return IntakeDryRunResponse(
+            decision=decision,
+            rule=request.rule,
+            would_create_alert=decision.allowed,
+        )
 
     async def process_alert_event(
         self,

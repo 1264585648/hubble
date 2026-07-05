@@ -24,5 +24,18 @@ def test_webhook_demo() -> None:
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["severity"] == "high"
-    assert "payment-api error rate is high" in body["summary"]
+    assert body["event"]["type"] == "alert.ingested"
+    assert body["alert"]["severity"] == "high"
+    assert body["incident"]["status"] == "open"
+    assert body["analysis"]["severity"] == "high"
+    assert "payment-api error rate is high" in body["analysis"]["summary"]
+
+
+def test_alerts_and_incidents_are_queryable() -> None:
+    alerts_response = client.get("/alerts")
+    incidents_response = client.get("/incidents")
+
+    assert alerts_response.status_code == 200
+    assert incidents_response.status_code == 200
+    assert isinstance(alerts_response.json(), list)
+    assert isinstance(incidents_response.json(), list)

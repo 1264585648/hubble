@@ -6,7 +6,7 @@ Hubble 的目标不是做一个“Webhook + LLM + 飞书推送”的简单串联
 
 > **告警系统的主干应该是事件、告警和事件组生命周期；大模型是增强分析与处置能力，不应该成为唯一主链路。**
 
-这样即使模型不可用，Hubble 仍然可以完成告警接入、去重、分组、路由、静默、升级和推送；模型可用时，再增强摘要、归因、影响面判断和处置建议。
+进一步调整后，Hubble 在告警事件进入 Alert Core 之前增加一层 **Intake Rule & Filter Engine（前置规则与过滤层）**。它用于过滤低价值告警、测试环境告警、已知噪音告警，也可以对事件做轻量打标和字段重写。
 
 ## 1. 参考项目与借鉴点
 
@@ -26,6 +26,7 @@ Hubble 的目标不是做一个“Webhook + LLM + 飞书推送”的简单串联
 ┌──────────────────────────────────────────────────────────────────────┐
 │                           Interface Layer                            │
 │     Web UI / CLI / REST API / Feishu / WeCom / Slack / Web Chat       │
+│     Rule Config Page: 前置规则配置、过滤测试、规则启停                  │
 └───────────────────────────────▲──────────────────────────────────────┘
                                 │
 ┌───────────────────────────────┴──────────────────────────────────────┐
@@ -45,12 +46,17 @@ Hubble 的目标不是做一个“Webhook + LLM + 飞书推送”的简单串联
                                 │
 ┌───────────────────────────────┴──────────────────────────────────────┐
 │                    Workflow & Policy Engine                           │
-│       规则、升级链、抑制、静默、审批、自动化编排、危险动作拦截             │
+│       路由、升级、抑制、静默、审批、自动化编排、危险动作拦截               │
 └───────────────────────────────▲──────────────────────────────────────┘
                                 │
 ┌───────────────────────────────┴──────────────────────────────────────┐
 │                 Alert / Incident Lifecycle Core                       │
 │       归一化、指纹、去重、分组、关联、状态机、事件组、生命周期             │
+└───────────────────────────────▲──────────────────────────────────────┘
+                                │
+┌───────────────────────────────┴──────────────────────────────────────┐
+│                 Intake Rule & Filter Engine                           │
+│       allow、drop、tag、rewrite、采样、噪音过滤、规则配置                 │
 └───────────────────────────────▲──────────────────────────────────────┘
                                 │
 ┌───────────────────────────────┴──────────────────────────────────────┐
@@ -69,258 +75,110 @@ Hubble 的目标不是做一个“Webhook + LLM + 飞书推送”的简单串联
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-## 3. 为什么这样调整
+## 3. 新增 Intake Rule & Filter Engine
 
-### 3.1 接入层不应该直接连模型
+这层位于 `Event Bus` 和 `Alert / Incident Lifecycle Core` 之间。
 
-原来的链路容易变成：
-
-```text
-Webhook → LLM → Tool → Push
-```
-
-这个链路演示很快，但长期会有问题：
-
-- 模型失败时，整个告警链路不可用。
-- 无法很好做去重、聚合、静默、升级。
-- 多个告警无法沉淀为 incident。
-- 群聊追问缺少可绑定的生命周期对象。
-
-优化后应该是：
+它的职责是：
 
 ```text
-Event → Alert → Incident → Policy / Workflow → Reasoning → Notification / Conversation
+EventEnvelope(alert.received)
+→ IntakeDecision
+→ EventEnvelope(alert.ingested) 或 EventEnvelope(alert.filtered)
 ```
 
-模型只是其中一个可插拔能力，而不是全部。
+### 3.1 为什么不能放进 Policy Engine
 
-### 3.2 “推送层”和“会话层”应该合并为交互层
+前置规则和 Policy Engine 的边界不同：
 
-飞书、企微、Slack 既能推送，也能接收用户回复。它们不应该被拆成两个完全独立系统，而应该抽象为：
+| 层 | 处理时机 | 处理对象 | 核心问题 |
+| --- | --- | --- | --- |
+| Intake Rule & Filter | Alert 创建前 | EventEnvelope | 这个事件要不要进入告警生命周期？ |
+| Policy & Workflow | Alert / Incident 创建后 | Alert + Incident | 这个事件组应该怎么路由、升级、处置？ |
+
+如果把过滤逻辑放进 Policy 层，会导致大量低价值事件仍然进入 Alert Core、Incident Core、模型分析和推送链路，增加噪音和成本。
+
+### 3.2 支持动作
+
+第一版支持：
 
 ```text
-ChannelAdapter
-├── send(notification)
-├── reply(thread, message)
-├── listen(handler)
-└── parse_command(message)
+allow    允许进入 Alert Core
+drop     丢弃，不进入 Alert Core
+tag      给事件添加 labels
+rewrite  修改事件字段，例如 severity、labels、annotations
 ```
 
-对于只能发不能回的渠道，比如普通 Webhook，可以只实现 `send`。对于飞书、企微、Slack，可以同时实现 `send + listen + reply`。
-
-### 3.3 工具层要分成 Tool 和 Action
-
-不是所有“工具调用”风险都一样。
-
-建议拆成：
+后续可扩展：
 
 ```text
-Tool      = 只读查询，如查日志、查指标、查 DB、查知识库
-Action    = 有副作用操作，如重启服务、扩容、回滚、创建工单、静默告警
-Workflow  = 多个 Tool / Action 的编排
+sample        按比例采样
+rate_limit    频率限制
+merge_hint    给后续 group_by 提供聚合提示
+route_hint    给 Policy Engine 提供路由提示
 ```
 
-默认策略：
+### 3.3 规则配置页面
 
-- 只读 Tool 可以自动执行。
-- Action 默认需要人工确认。
-- 高危 Action 必须二次确认 + RBAC + 审计。
-- 所有 Tool / Action 都必须有超时、参数 schema、脱敏和执行记录。
-
-### 3.4 增加 Workflow & Policy Engine
-
-这是原架构缺失但非常关键的一层。
-
-它负责：
-
-- 告警路由：哪个团队、哪个群、哪个值班人。
-- 告警抑制：主故障存在时抑制从属故障。
-- 静默窗口：发布窗口、维护窗口、已知问题。
-- 升级链：未确认多久后升级给谁。
-- 自动处置：满足条件时执行只读诊断或低风险动作。
-- 人工确认：危险动作前让群里负责人确认。
-
-规则示例：
-
-```yaml
-rules:
-  - name: critical-payment-alert
-    when:
-      labels.service: payment-api
-      severity: critical
-    group_by: [service, env, region]
-    route_to: [feishu-payment-sre]
-    enrich:
-      - query_recent_deployments
-      - query_error_logs
-      - query_prometheus_metrics
-    require_ai_analysis: true
-    escalation:
-      after: 10m
-      to: [feishu-sre-leads]
-```
-
-## 4. 核心数据模型
-
-### 4.1 EventEnvelope
-
-所有外部输入先进入统一事件信封。这里参考 CloudEvents，但不强制用户使用 CloudEvents。
+Hubble 会提供独立页面：
 
 ```text
-EventEnvelope
+/admin/intake-rules
+```
+
+它用于：
+
+- 查看规则列表。
+- 新增 / 修改 / 删除规则。
+- 启用 / 禁用规则。
+- 配置 match 条件。
+- 选择 action：allow / drop / tag / rewrite。
+- 后续扩展：规则命中统计、规则 dry-run、样例事件测试。
+
+## 4. 核心事件链路
+
+```text
+Adapter.to_event(raw)
+→ EventEnvelope(type="alert.received")
+→ Event Bus
+→ IntakeRuleEngine.evaluate(event)
+→ allowed: EventEnvelope(type="alert.ingested")
+→ dropped: EventEnvelope(type="alert.filtered")
+→ AlertLifecycleService
+→ IncidentLifecycleService
+→ PolicyEngine
+→ ReasoningService
+→ ChannelAdapter
+```
+
+## 5. 核心数据模型补充
+
+### 5.1 IntakeRule
+
+```text
+IntakeRule
 ├── id
-├── source
-├── type
-├── subject
-├── time
-├── data
-├── datacontenttype
-├── trace_id
-├── tenant_id
-└── extensions
-```
-
-### 4.2 Alert
-
-Alert 是单条告警对象。
-
-```text
-Alert
-├── id
-├── source
-├── title
-├── description
-├── severity
-├── status                 # firing / resolved / acknowledged / suppressed
-├── labels
-├── annotations
-├── fingerprint
-├── starts_at
-├── ends_at
-├── raw_event_id
-└── incident_id
-```
-
-### 4.3 Incident
-
-Incident 是一组相关 Alert 的聚合对象。Hubble 真正应该围绕 Incident 做会话和处置。
-
-```text
-Incident
-├── id
-├── title
-├── severity
-├── status                 # open / investigating / mitigated / resolved
-├── alert_fingerprints
-├── affected_services
-├── owner_team
-├── timeline
-├── current_summary
-├── last_analysis_id
-└── created_at / updated_at / resolved_at
-```
-
-### 4.4 Analysis
-
-模型分析结果必须结构化，不能只存一段自然语言。
-
-```text
-Analysis
-├── id
-├── alert_id / incident_id
-├── summary
-├── severity_assessment
-├── possible_causes
-├── impact
-├── evidence
-├── recommended_actions
-├── requested_tools
-├── confidence
-├── model_provider
-├── prompt_version
-└── raw_response
-```
-
-### 4.5 Execution
-
-每一次工具、动作、工作流执行都要记录。
-
-```text
-Execution
-├── id
-├── type                   # tool / action / workflow
 ├── name
-├── params
-├── status                 # pending / running / succeeded / failed / blocked
-├── requested_by           # model / user / rule
-├── approved_by
-├── result
-├── elapsed_ms
-└── audit_metadata
+├── enabled
+├── priority
+├── match
+├── action              # allow / drop / tag / rewrite
+├── reason
+├── add_labels
+├── set_fields
+└── stop_processing
 ```
 
-## 5. 关键运行链路
+### 5.2 IntakeDecision
 
-### 5.1 告警进入链路
-
-```mermaid
-sequenceDiagram
-    participant Source as Alert Source
-    participant Adapter as Adapter / Collector
-    participant Bus as Event Bus
-    participant Core as Alert Core
-    participant Policy as Workflow & Policy
-    participant Agent as Reasoning Layer
-    participant Tool as Tool Runtime
-    participant Channel as Channel Adapter
-
-    Source->>Adapter: Webhook / Polling / API Event
-    Adapter->>Bus: EventEnvelope
-    Bus->>Core: Normalize Event
-    Core->>Core: Fingerprint / Dedup / Group / Incident State
-    Core->>Policy: Match Rules
-    Policy->>Tool: Run readonly enrichment tools
-    Tool-->>Policy: Evidence
-    Policy->>Agent: Analyze Alert / Incident
-    Agent-->>Policy: Structured Analysis
-    Policy->>Channel: Send Notification
-```
-
-### 5.2 群聊追问链路
-
-```mermaid
-sequenceDiagram
-    participant User as User
-    participant Channel as Channel Adapter
-    participant Core as Incident Core
-    participant Agent as Reasoning Layer
-    participant Tool as Tool Runtime
-
-    User->>Channel: 群里追问 / command
-    Channel->>Core: Bind thread to Incident
-    Core->>Agent: Question + Incident Context
-    Agent->>Tool: Optional readonly tool calls
-    Tool-->>Agent: Evidence
-    Agent-->>Channel: Answer / Action Proposal
-    Channel-->>User: Reply in thread
-```
-
-### 5.3 危险动作链路
-
-```mermaid
-sequenceDiagram
-    participant Agent as Reasoning Layer
-    participant Policy as Policy Engine
-    participant User as Human Approver
-    participant Action as Action Runtime
-    participant Audit as Audit Log
-
-    Agent->>Policy: Propose dangerous action
-    Policy->>User: Request confirmation
-    User-->>Policy: Approve / Reject
-    Policy->>Action: Execute if approved
-    Action-->>Policy: Result
-    Policy->>Audit: Record full execution
+```text
+IntakeDecision
+├── allowed
+├── action
+├── matched_rule_id
+├── matched_rule_name
+├── reason
+└── event
 ```
 
 ## 6. 模块拆分建议
@@ -329,6 +187,7 @@ sequenceDiagram
 src/hubble/
 ├── adapters/              # 外部系统适配器：Webhook、飞书、企微、Slack、Sentry 等
 ├── events/                # EventEnvelope、事件总线、重试、死信队列
+├── intake/                # 前置规则、过滤、打标、重写、规则配置 API
 ├── alerts/                # Alert 归一化、指纹、去重、状态机
 ├── incidents/             # Incident 聚合、时间线、生命周期
 ├── policies/              # 路由、静默、抑制、升级、审批策略
@@ -342,11 +201,9 @@ src/hubble/
 └── server.py
 ```
 
-第一版代码可以继续保留当前简单结构，但后续建议从 `notifiers/session/ingress` 逐步迁移到 `adapters/events/channels`，这样抽象会更稳。
-
 ## 7. MVP 应该怎么收敛
 
-不要一开始就做完整平台。建议 Hubble MVP 只做 4 条闭环：
+不要一开始就做完整平台。建议 Hubble MVP 只做 5 条闭环：
 
 ### MVP-1：稳定告警入口
 
@@ -356,14 +213,22 @@ src/hubble/
 - 简单 dedup。
 - Console / Feishu 推送。
 
-### MVP-2：AI 分析闭环
+### MVP-2：前置规则过滤闭环
+
+- IntakeRule 模型。
+- InMemory IntakeRuleEngine。
+- `/intake-rules` API。
+- `/admin/intake-rules` 规则配置页面。
+- drop / tag / rewrite。
+
+### MVP-3：AI 分析闭环
 
 - OpenAI-compatible model provider。
 - Prompt versioning。
 - Structured Analysis。
 - 模型失败 fallback。
 
-### MVP-3：工具增强闭环
+### MVP-4：工具增强闭环
 
 - HTTP tool。
 - Prometheus query tool。
@@ -371,38 +236,14 @@ src/hubble/
 - 工具结果脱敏。
 - 工具调用审计。
 
-### MVP-4：ChatOps 闭环
+### MVP-5：ChatOps 闭环
 
 - 飞书群消息监听。
 - thread ↔ incident 绑定。
 - `/explain`、`/logs 10m`、`/ack`、`/silence 30m`。
 - 危险动作只提出建议，不自动执行。
 
-## 8. 推荐技术选型
-
-### 单体开发模式
-
-适合开源早期：
-
-```text
-FastAPI + APScheduler + PostgreSQL/SQLite + Redis optional + Pydantic
-```
-
-### 可扩展部署模式
-
-适合企业内部：
-
-```text
-API Server + Worker + Event Bus + PostgreSQL + Redis + Object Storage
-```
-
-### 事件总线选择
-
-- 单机 / MVP：内存队列或 Redis Streams。
-- 企业部署：NATS / Kafka / RabbitMQ 任选其一。
-- Kubernetes 场景：后续可考虑 CloudEvents / Knative Eventing 兼容。
-
-## 9. Hubble 的定位差异
+## 8. Hubble 的定位差异
 
 Hubble 不建议直接做成 Keep 的复制品，也不建议做成 Alertmanager 的 Python 版。
 
@@ -416,12 +257,13 @@ Hubble 不建议直接做成 Keep 的复制品，也不建议做成 Alertmanager
 - 比传统 OnCall 工具更轻量。
 - 比通用 Agent 框架更聚焦告警场景。
 - 比 AIOps 大平台更容易本地部署和二次开发。
+- 比简单 LLM 转发器更能控制告警噪音和生命周期。
 
-## 10. 后续实现优先级
+## 9. 后续实现优先级
 
 ```text
-P0: EventEnvelope + Alert fingerprint + Webhook parser
-P1: Alertmanager-compatible grouping / silence / inhibition 简化版
+P0: IntakeRuleEngine + EventEnvelope + Alert fingerprint + Webhook parser
+P1: Intake Rule Config Page + Alertmanager-compatible grouping / silence / inhibition 简化版
 P2: Feishu ChannelAdapter：推送 + 回复 + 命令
 P3: OpenAI-compatible ReasoningProvider + Structured Analysis
 P4: Tool Runtime：Prometheus / Logs / HTTP / Runbook

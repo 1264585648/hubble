@@ -1,6 +1,7 @@
 # ruff: noqa: E501
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import uvicorn
@@ -12,6 +13,8 @@ from hubble.alerts.models import Alert
 from hubble.events.models import EventEnvelope
 from hubble.incidents.models import Incident
 from hubble.intake.models import IntakeDecision, IntakeDryRunRequest, IntakeDryRunResponse, IntakeRule
+from hubble.policies.config import load_policy_rules_from_file
+from hubble.policies.service import PolicyEngine
 from hubble.reasoning.models import Analysis
 from hubble.runtime import HubbleRuntime
 
@@ -21,7 +24,10 @@ app = FastAPI(
     version="0.1.0",
 )
 
-runtime = HubbleRuntime()
+CONFIG_PATH = os.getenv("HUBBLE_CONFIG", "configs/hubble.example.yaml")
+runtime = HubbleRuntime(
+    policy_engine=PolicyEngine(load_policy_rules_from_file(CONFIG_PATH)),
+)
 
 
 class WebhookResponse(BaseModel):

@@ -12,6 +12,8 @@ from hubble.events.bus import InMemoryEventBus
 from hubble.events.models import EventEnvelope
 from hubble.incidents.models import Incident
 from hubble.incidents.service import IncidentLifecycleService
+from hubble.intake.models import IntakeDecision, IntakeRule
+from hubble.intake.service import IntakeRuleEngine
 from hubble.policies.models import PolicyDecision
 from hubble.policies.service import PolicyEngine
 from hubble.reasoning.models import Analysis
@@ -21,11 +23,13 @@ from hubble.reasoning.service import ReasoningService
 @dataclass(slots=True)
 class AlertPipelineResult:
     event: EventEnvelope
-    alert: Alert
-    incident: Incident
-    policy: PolicyDecision
-    analysis: Analysis
+    intake: IntakeDecision
+    alert: Alert | None = None
+    incident: Incident | None = None
+    policy: PolicyDecision | None = None
+    analysis: Analysis | None = None
     duplicate: bool = False
+    filtered: bool = False
 
 
 class HubbleRuntime:
@@ -35,6 +39,7 @@ class HubbleRuntime:
         self,
         *,
         event_bus: InMemoryEventBus | None = None,
+        intake_engine: IntakeRuleEngine | None = None,
         alert_lifecycle: AlertLifecycleService | None = None,
         incident_lifecycle: IncidentLifecycleService | None = None,
         policy_engine: PolicyEngine | None = None,
@@ -42,6 +47,7 @@ class HubbleRuntime:
         channel_registry: ChannelRegistry | None = None,
     ) -> None:
         self.event_bus = event_bus or InMemoryEventBus()
+        self.intake_engine = intake_engine or IntakeRuleEngine()
         self.alert_lifecycle = alert_lifecycle or AlertLifecycleService()
         self.incident_lifecycle = incident_lifecycle or IncidentLifecycleService()
         self.policy_engine = policy_engine or PolicyEngine()
@@ -53,11 +59,47 @@ class HubbleRuntime:
 
     async def ingest_webhook(self, source: str, payload: dict[str, Any]) -> AlertPipelineResult:
         adapter = GenericWebhookAdapter(source=source)
-        event = adapter.to_event(payload)
-        await self.event_bus.publish(event)
-        return await self.process_alert_event(event)
+        received_event = adapter.to_event(payload)
+        await self.event_bus.publish(received_event)
 
-    async def process_alert_event(self, event: EventEnvelope) -> AlertPipelineResult:
+        intake = self.intake_engine.evaluate(received_event)
+        if not intake.allowed:
+            await self.event_bus.publish(
+                EventEnvelope(
+                    type="alert.filtered",
+                    source="hubble.intake",
+                    subject=received_event.subject,
+                    data={
+                        "event_id": received_event.id,
+                        "reason": intake.reason,
+                        "matched_rule_id": intake.matched_rule_id,
+                        "matched_rule_name": intake.matched_rule_name,
+                    },
+                    trace_id=received_event.trace_id,
+                    tenant_id=received_event.tenant_id,
+                )
+            )
+            return AlertPipelineResult(
+                event=received_event,
+                intake=intake,
+                filtered=True,
+            )
+
+        await self.event_bus.publish(intake.event)
+        return await self.process_alert_event(intake.event, intake=intake)
+
+    async def process_alert_event(
+        self,
+        event: EventEnvelope,
+        *,
+        intake: IntakeDecision | None = None,
+    ) -> AlertPipelineResult:
+        if intake is None:
+            intake = self.intake_engine.evaluate(event)
+            if not intake.allowed:
+                return AlertPipelineResult(event=event, intake=intake, filtered=True)
+            event = intake.event
+
         lifecycle_result = self.alert_lifecycle.handle_event(event)
         alert = lifecycle_result.alert
 
@@ -90,12 +132,22 @@ class HubbleRuntime:
 
         return AlertPipelineResult(
             event=event,
+            intake=intake,
             alert=alert,
             incident=incident,
             policy=policy,
             analysis=analysis,
             duplicate=lifecycle_result.is_duplicate,
         )
+
+    def list_intake_rules(self) -> list[IntakeRule]:
+        return self.intake_engine.list_rules()
+
+    def upsert_intake_rule(self, rule: IntakeRule) -> IntakeRule:
+        return self.intake_engine.upsert_rule(rule)
+
+    def delete_intake_rule(self, rule_id: str) -> bool:
+        return self.intake_engine.delete_rule(rule_id)
 
     async def handle_channel_message(self, message: IncomingChannelMessage) -> str:
         incident = self.incident_lifecycle.get(message.incident_id or "")

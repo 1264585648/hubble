@@ -114,6 +114,7 @@ model:
       base_url_env: HUBBLE_MODEL_BASE_URL
       api_key_env: HUBBLE_MODEL_API_KEY
       model_env: HUBBLE_MODEL_NAME
+      timeout_seconds: 20
 
   routing:
     default_provider: echo

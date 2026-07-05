@@ -34,6 +34,10 @@ class WebhookResponse(BaseModel):
     filtered: bool = False
 
 
+class IncidentTransitionRequest(BaseModel):
+    actor: str | None = None
+
+
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
@@ -81,6 +85,48 @@ async def list_alerts() -> list[Alert]:
 @app.get("/incidents", response_model=list[Incident])
 async def list_incidents() -> list[Incident]:
     return runtime.incident_lifecycle.list_incidents()
+
+
+@app.post("/incidents/{incident_id}/ack", response_model=Incident)
+async def ack_incident(
+    incident_id: str,
+    request: IncidentTransitionRequest | None = None,
+) -> Incident:
+    incident = runtime.incident_lifecycle.ack(
+        incident_id,
+        actor=request.actor if request else None,
+    )
+    if not incident:
+        raise HTTPException(status_code=404, detail="incident not found")
+    return incident
+
+
+@app.post("/incidents/{incident_id}/resolve", response_model=Incident)
+async def resolve_incident(
+    incident_id: str,
+    request: IncidentTransitionRequest | None = None,
+) -> Incident:
+    incident = runtime.incident_lifecycle.resolve(
+        incident_id,
+        actor=request.actor if request else None,
+    )
+    if not incident:
+        raise HTTPException(status_code=404, detail="incident not found")
+    return incident
+
+
+@app.post("/incidents/{incident_id}/reopen", response_model=Incident)
+async def reopen_incident(
+    incident_id: str,
+    request: IncidentTransitionRequest | None = None,
+) -> Incident:
+    incident = runtime.incident_lifecycle.reopen(
+        incident_id,
+        actor=request.actor if request else None,
+    )
+    if not incident:
+        raise HTTPException(status_code=404, detail="incident not found")
+    return incident
 
 
 @app.get("/intake-rules", response_model=list[IntakeRule])

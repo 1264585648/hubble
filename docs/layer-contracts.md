@@ -10,7 +10,22 @@ Hubble V2 的解耦原则：
 2. **API**：查询状态或下发命令，不承载主链路数据流。
 3. **Capability Contract**：能力声明，如工具、动作、通道、模型 provider 的 schema。
 
-## 1. EventEnvelope
+## 1. Adapter Contract
+
+所有接入源都必须先实现 Adapter 契约：
+
+```text
+Adapter.to_event(raw) -> EventEnvelope
+```
+
+约束：
+
+- Adapter 只负责协议解析和格式转换。
+- Adapter 不允许调用模型、工具、通道。
+- Adapter 不做告警 dedup、不做 policy 判断。
+- Adapter 的输出只能是 `EventEnvelope`。
+
+## 2. EventEnvelope
 
 所有外部输入必须先转成 `EventEnvelope`。
 
@@ -36,12 +51,11 @@ EventEnvelope
 
 约束：
 
-- Adapter 只产出 EventEnvelope。
-- Adapter 不允许调用模型、工具、通道。
 - EventEnvelope 发布后不可变。
+- 主链路必须围绕 EventEnvelope 传递，而不是直接传原始 payload。
 - 未来可以替换为 Redis Streams / NATS / Kafka，而不影响上层。
 
-## 2. Alert Lifecycle Contract
+## 3. Alert Lifecycle Contract
 
 输入：
 
@@ -72,7 +86,7 @@ Alert Core 不允许：
 - 发通知
 - 读群聊消息
 
-## 3. Incident Lifecycle Contract
+## 4. Incident Lifecycle Contract
 
 输入：
 
@@ -97,7 +111,7 @@ Incident Core 只负责：
 
 Incident Core 不做策略判断，也不直接推送。
 
-## 4. Policy Decision Contract
+## 5. Policy Decision Contract
 
 输入：
 
@@ -133,7 +147,7 @@ Policy Engine 不负责：
 - 具体怎么调用模型
 - 具体怎么发飞书卡片
 
-## 5. Reasoning Contract
+## 6. Reasoning Contract
 
 输入：
 
@@ -168,7 +182,7 @@ Analysis
 - Reasoning 不能直接执行危险 Action。
 - 模型失败时必须 fallback。
 
-## 6. Tool / Action Contract
+## 7. Tool / Action Contract
 
 Tool 是只读查询；Action 是有副作用动作。
 
@@ -192,7 +206,7 @@ ActionRequested → ActionApprovalRequired → ActionApproved → ActionExecuted
 - 所有结果必须脱敏。
 - 工具不能知道调用它的是模型、策略还是用户。
 
-## 7. Channel Contract
+## 8. Channel Contract
 
 推送和会话统一为 ChannelAdapter。
 
@@ -213,12 +227,13 @@ ChannelAdapter
 - command parse
 - thread binding
 
-## 8. Runtime Orchestration Contract
+## 9. Runtime Orchestration Contract
 
 Runtime 是薄编排层，只负责把稳定契约串起来：
 
 ```text
-EventEnvelope
+Adapter
+→ EventEnvelope
 → AlertLifecycleResult
 → Incident
 → PolicyDecision
@@ -228,11 +243,12 @@ EventEnvelope
 
 Runtime 不应该包含复杂业务规则。复杂规则应该沉入 Policy Engine，复杂推理应该沉入 Reasoning Layer，外部系统差异应该沉入 Adapter / Channel / Tool。
 
-## 9. 当前代码落地状态
+## 10. 当前代码落地状态
 
 已落地模块：
 
 ```text
+src/hubble/adapters     Adapter + GenericWebhookAdapter
 src/hubble/events       EventEnvelope + InMemoryEventBus
 src/hubble/alerts       Alert + AlertLifecycleService
 src/hubble/incidents    Incident + IncidentLifecycleService

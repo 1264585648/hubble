@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from hubble.alerts.models import Alert
+from hubble.core.models import ToolResult
 from hubble.incidents.models import Incident
 from hubble.policies.models import PolicyDecision
 from hubble.reasoning.models import Analysis
@@ -27,16 +28,23 @@ class ReasoningService:
         alert: Alert,
         incident: Incident,
         policy: PolicyDecision,
+        tool_results: list[ToolResult] | None = None,
     ) -> Analysis:
+        tool_results = tool_results or []
+        possible_causes = [
+            "当前使用内置 Echo reasoning，仅返回基础分析。",
+            "后续可接入 OpenAI-compatible provider 和工具增强上下文。",
+        ]
+        if tool_results:
+            ok_count = sum(1 for item in tool_results if item.ok)
+            possible_causes.append(f"已执行 {len(tool_results)} 个上下文工具，成功 {ok_count} 个。")
+
         return Analysis(
             alert_id=alert.id,
             incident_id=incident.id,
             summary=f"{alert.title}: {alert.description or 'No description provided.'}",
             severity=alert.severity,
-            possible_causes=[
-                "当前使用内置 Echo reasoning，仅返回基础分析。",
-                "后续可接入 OpenAI-compatible provider 和工具增强上下文。",
-            ],
+            possible_causes=possible_causes,
             impact=(
                 f"关联 Incident: {incident.id}; "
                 f"受影响服务: {', '.join(incident.affected_services) or '待确认'}"
@@ -46,10 +54,15 @@ class ReasoningService:
                 "检查最近发布、配置变更和依赖服务状态。",
                 "根据 runbook 执行下一步排查。",
             ],
+            tool_results=tool_results,
             confidence=0.2,
             model_provider=self.provider_name,
             prompt_version=self.prompt_version,
-            raw_response=f"policy={policy.reason}",
+            raw_response=(
+                f"policy={policy.reason}; tool_results={len(tool_results)}"
+                if tool_results
+                else f"policy={policy.reason}"
+            ),
         )
 
 
@@ -82,13 +95,16 @@ class OpenAICompatibleReasoningService:
         alert: Alert,
         incident: Incident,
         policy: PolicyDecision,
+        tool_results: list[ToolResult] | None = None,
     ) -> Analysis:
+        tool_results = tool_results or []
         try:
             payload = _build_chat_completion_payload(
                 model=self.model,
                 alert=alert,
                 incident=incident,
                 policy=policy,
+                tool_results=tool_results,
             )
             response_json = await self._post_chat_completion(payload)
             content = _extract_message_content(response_json)
@@ -96,6 +112,7 @@ class OpenAICompatibleReasoningService:
                 content,
                 alert=alert,
                 incident=incident,
+                tool_results=tool_results,
                 raw_response=content,
             )
             analysis.model_provider = self.provider_name
@@ -106,8 +123,11 @@ class OpenAICompatibleReasoningService:
                 alert=alert,
                 incident=incident,
                 policy=policy,
+                tool_results=tool_results,
             )
-            fallback_analysis.raw_response = f"fallback_from={self.provider_name}; error={type(exc).__name__}"
+            fallback_analysis.raw_response = (
+                f"fallback_from={self.provider_name}; error={type(exc).__name__}"
+            )
             return fallback_analysis
 
     async def _post_chat_completion(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -137,6 +157,7 @@ def _build_chat_completion_payload(
     alert: Alert,
     incident: Incident,
     policy: PolicyDecision,
+    tool_results: list[ToolResult],
 ) -> dict[str, Any]:
     return {
         "model": model,
@@ -149,7 +170,8 @@ def _build_chat_completion_payload(
                     "You are Hubble, an AI alert analysis assistant. "
                     "Return only valid JSON matching this schema: "
                     "summary:string, severity:string, possible_causes:string[], "
-                    "impact:string, recommended_actions:string[], confidence:number."
+                    "impact:string, recommended_actions:string[], confidence:number. "
+                    "Use tool_results as supporting context when present."
                 ),
             },
             {
@@ -159,6 +181,7 @@ def _build_chat_completion_payload(
                         "alert": alert.model_dump(mode="json"),
                         "incident": incident.model_dump(mode="json"),
                         "policy": policy.model_dump(mode="json"),
+                        "tool_results": [item.model_dump(mode="json") for item in tool_results],
                     },
                     ensure_ascii=False,
                 ),
@@ -185,6 +208,7 @@ def _analysis_from_json_content(
     *,
     alert: Alert,
     incident: Incident,
+    tool_results: list[ToolResult],
     raw_response: str,
 ) -> Analysis:
     payload = json.loads(content)
@@ -199,6 +223,7 @@ def _analysis_from_json_content(
         possible_causes=_string_list(payload.get("possible_causes")),
         impact=str(payload.get("impact") or ""),
         recommended_actions=_string_list(payload.get("recommended_actions")),
+        tool_results=tool_results,
         confidence=float(payload.get("confidence") or 0.0),
         raw_response=raw_response,
     )

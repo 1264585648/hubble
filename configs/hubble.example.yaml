@@ -85,7 +85,7 @@ policies:
       should_notify: true
       should_analyze: true
       channels: [console]
-      enrich_tools: [query_logs, query_prometheus]
+      enrich_tools: [query_logs]
       escalation_channels: [console]
       require_approval: false
 
@@ -132,11 +132,36 @@ tools:
     - name: query_logs
       type: http
       enabled: false
-      description: Query logs from an internal log service.
+      description: Query recent logs from an internal log service.
       method: POST
       url_env: HUBBLE_QUERY_LOGS_URL
+      bearer_token_env: HUBBLE_QUERY_LOGS_TOKEN
+      headers:
+        Content-Type: application/json
+      body_template:
+        service: "{service}"
+        env: "{env}"
+        severity: "{severity}"
+        incident_id: "{incident.id}"
+        alert_id: "{alert.id}"
+        query: "service={service} env={env}"
+        limit: 20
       timeout_seconds: 10
       dangerous: false
+      sensitive_fields: [authorization, token, password, secret]
+
+    - name: query_service_health
+      type: http
+      enabled: false
+      description: Query service health endpoint by service label.
+      method: GET
+      url_env: HUBBLE_SERVICE_HEALTH_URL
+      headers_env:
+        X-Internal-Token: HUBBLE_SERVICE_HEALTH_TOKEN
+      timeout_seconds: 5
+      dangerous: false
+      sensitive_fields: [x-internal-token, token, secret]
+
     - name: query_database
       type: sql
       enabled: false

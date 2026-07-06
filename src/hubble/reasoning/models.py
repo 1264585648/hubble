@@ -6,6 +6,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from hubble.alerts.models import AlertSeverity
+from hubble.core.models import ToolResult
 
 
 class ToolCallRequest(BaseModel):
@@ -26,6 +27,7 @@ class Analysis(BaseModel):
     impact: str = ""
     recommended_actions: list[str] = Field(default_factory=list)
     tool_requests: list[ToolCallRequest] = Field(default_factory=list)
+    tool_results: list[ToolResult] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     model_provider: str | None = None
     prompt_version: str | None = None

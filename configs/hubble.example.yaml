@@ -85,7 +85,7 @@ policies:
       should_notify: true
       should_analyze: true
       channels: [console]
-      enrich_tools: [query_logs]
+      enrich_tools: [query_logs, query_prometheus]
       escalation_channels: [console]
       require_approval: false
 
@@ -149,6 +149,14 @@ tools:
       timeout_seconds: 10
       dangerous: false
       sensitive_fields: [authorization, token, password, secret]
+
+    - name: query_prometheus
+      type: prometheus
+      enabled: false
+      description: Query Prometheus instant and range metrics.
+      base_url_env: HUBBLE_PROMETHEUS_BASE_URL
+      bearer_token_env: HUBBLE_PROMETHEUS_TOKEN
+      timeout_seconds: 10
 
     - name: query_service_health
       type: http

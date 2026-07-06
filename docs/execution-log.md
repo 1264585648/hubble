@@ -305,12 +305,82 @@ tests/test_feishu_channel.py
 README.md
 ```
 
+## 2026-07-05：第五批任务执行
+
+### 已完成任务
+
+```text
+T5.2 HTTP Tool
+T5.3 Prometheus Query Tool
+```
+
+## T5.2 HTTP Tool
+
+### 完成内容
+
+- 新增 `ToolSpec`、`ToolContext`、`ToolRegistry`。
+- 新增 `HttpTool`。
+- 支持只读 / 危险工具区分。
+- 支持超时控制。
+- 支持 URL、Header、Body 模板渲染。
+- 支持 bearer token 和 header 从环境变量加载。
+- 支持敏感字段脱敏。
+- Runtime 支持根据 `PolicyDecision.enrich_tools` 自动执行只读工具。
+- 新增工具 API：
+  - `GET /tools`
+  - `POST /tools/{tool_name}/run`
+
+### 验收结果
+
+- 工具有 name、description、input_schema、dangerous、timeout。
+- 未注册工具返回结构化错误。
+- dangerous tool 默认不执行。
+- 工具结果可以进入 Analysis.tool_results。
+- README 有配置和手动执行示例。
+
+## T5.3 Prometheus Query Tool
+
+### 完成内容
+
+- 新增 `PrometheusQueryTool`。
+- 支持 instant query：`GET /api/v1/query`。
+- 支持 range query：`GET /api/v1/query_range`。
+- 支持 `query`、`time`、`start`、`end`、`step`、`timeout`、`limit` 参数。
+- 支持从 YAML 注册 `type: prometheus` 工具。
+- 支持 bearer token 从环境变量加载。
+- 支持通过 `GET /tools` 查看，通过 `POST /tools/query_prometheus/run` 手动执行。
+- 支持被 Policy DSL 的 `enrich_tools` 自动调用。
+
+### 验收结果
+
+- 可以执行 Prometheus instant query。
+- 可以执行 Prometheus range query。
+- 查询失败返回结构化错误。
+- 支持通过配置加载 Prometheus tool。
+- 有测试覆盖 instant query、range query、参数校验和配置加载。
+
+## 本轮新增 / 修改文件
+
+```text
+src/hubble/tools/base.py
+src/hubble/tools/http.py
+src/hubble/tools/config.py
+src/hubble/tools/prometheus.py
+src/hubble/runtime.py
+src/hubble/server.py
+configs/hubble.example.yaml
+tests/test_prometheus_tool.py
+README.md
+```
+
 ## 当前最近下一批任务
 
 建议继续按以下顺序执行：
 
 ```text
-1. T5.2 HTTP Tool
-2. T5.3 Prometheus Query Tool
-3. T7.1 Storage Interface
+1. T7.1 Storage Interface
+2. T7.2 SQLite Storage
+3. T4.4 Prompt Versioning
+4. T5.4 Log Query Tool
+5. T6.3 Feishu Conversation Listener
 ```

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from hubble.alerts.models import Alert
 from hubble.channels.config import load_channel_registry_from_file
+from hubble.core.models import ToolResult
 from hubble.events.models import EventEnvelope
 from hubble.incidents.models import Incident
 from hubble.intake.models import IntakeDecision, IntakeDryRunRequest, IntakeDryRunResponse, IntakeRule
@@ -19,6 +20,8 @@ from hubble.policies.service import PolicyEngine
 from hubble.reasoning.config import load_reasoning_service_from_file
 from hubble.reasoning.models import Analysis
 from hubble.runtime import HubbleRuntime
+from hubble.tools.base import ToolContext, ToolSpec
+from hubble.tools.config import load_tool_registry_from_file
 
 app = FastAPI(
     title="Hubble Alert Bot",
@@ -30,6 +33,7 @@ CONFIG_PATH = os.getenv("HUBBLE_CONFIG", "configs/hubble.example.yaml")
 runtime = HubbleRuntime(
     policy_engine=PolicyEngine(load_policy_rules_from_file(CONFIG_PATH)),
     reasoning_service=load_reasoning_service_from_file(CONFIG_PATH),
+    tool_registry=load_tool_registry_from_file(CONFIG_PATH),
     channel_registry=load_channel_registry_from_file(CONFIG_PATH),
 )
 
@@ -40,12 +44,19 @@ class WebhookResponse(BaseModel):
     alert: Alert | None = None
     incident: Incident | None = None
     analysis: Analysis | None = None
+    tool_results: list[ToolResult] = []
     duplicate: bool = False
     filtered: bool = False
 
 
 class IncidentTransitionRequest(BaseModel):
     actor: str | None = None
+
+
+class ToolRunRequest(BaseModel):
+    params: dict[str, Any] = {}
+    context: ToolContext | None = None
+    allow_dangerous: bool = False
 
 
 @app.get("/healthz")
@@ -66,6 +77,7 @@ async def receive_alertmanager_webhook(
             alert=result.alert,
             incident=result.incident,
             analysis=result.analysis,
+            tool_results=result.tool_results,
             duplicate=result.duplicate,
             filtered=result.filtered,
         )
@@ -82,6 +94,7 @@ async def receive_webhook(source: str, payload: dict[str, Any]) -> WebhookRespon
         alert=result.alert,
         incident=result.incident,
         analysis=result.analysis,
+        tool_results=result.tool_results,
         duplicate=result.duplicate,
         filtered=result.filtered,
     )
@@ -137,6 +150,22 @@ async def reopen_incident(
     if not incident:
         raise HTTPException(status_code=404, detail="incident not found")
     return incident
+
+
+@app.get("/tools", response_model=list[ToolSpec])
+async def list_tools() -> list[ToolSpec]:
+    return runtime.list_tools()
+
+
+@app.post("/tools/{tool_name}/run", response_model=ToolResult)
+async def run_tool(tool_name: str, request: ToolRunRequest | None = None) -> ToolResult:
+    request = request or ToolRunRequest()
+    return await runtime.run_tool(
+        tool_name,
+        params=request.params,
+        context=request.context,
+        allow_dangerous=request.allow_dangerous,
+    )
 
 
 @app.get("/intake-rules", response_model=list[IntakeRule])

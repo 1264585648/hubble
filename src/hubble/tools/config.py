@@ -6,8 +6,9 @@ from typing import Any
 
 import yaml
 
-from hubble.tools.base import ToolRegistry
+from hubble.tools.base import Tool, ToolRegistry
 from hubble.tools.http import HttpTool
+from hubble.tools.prometheus import PrometheusQueryTool
 
 
 def load_tool_registry_from_file(path: str | Path) -> ToolRegistry:
@@ -29,10 +30,13 @@ def load_tool_registry_from_file(path: str | Path) -> ToolRegistry:
     for tool_config in tool_configs:
         if not isinstance(tool_config, dict) or not tool_config.get("enabled"):
             continue
+        tool: Tool | None = None
         if tool_config.get("type") == "http":
             tool = _build_http_tool(tool_config)
-            if tool:
-                _safe_register(registry, tool)
+        elif tool_config.get("type") == "prometheus":
+            tool = _build_prometheus_tool(tool_config)
+        if tool:
+            _safe_register(registry, tool)
 
     return registry
 
@@ -59,6 +63,23 @@ def _build_http_tool(config: dict[str, Any]) -> HttpTool | None:
     )
 
 
+def _build_prometheus_tool(config: dict[str, Any]) -> PrometheusQueryTool | None:
+    base_url = str(config.get("base_url") or "")
+    base_url_env = config.get("base_url_env")
+    if not base_url and base_url_env:
+        base_url = os.getenv(str(base_url_env), "")
+    if not base_url:
+        return None
+
+    return PrometheusQueryTool(
+        name=str(config.get("name") or "query_prometheus"),
+        description=str(config.get("description") or "Query Prometheus metrics."),
+        base_url=base_url,
+        headers=_headers_from_config(config),
+        timeout_seconds=float(config.get("timeout_seconds") or 10.0),
+    )
+
+
 def _headers_from_config(config: dict[str, Any]) -> dict[str, str]:
     headers: dict[str, str] = {}
     raw_headers = config.get("headers")
@@ -81,7 +102,7 @@ def _headers_from_config(config: dict[str, Any]) -> dict[str, str]:
     return headers
 
 
-def _safe_register(registry: ToolRegistry, tool: HttpTool) -> None:
+def _safe_register(registry: ToolRegistry, tool: Tool) -> None:
     if registry.get(tool.name):
         return
     registry.register(tool)

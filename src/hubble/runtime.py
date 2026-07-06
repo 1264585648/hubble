@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from hubble.adapters.alertmanager import AlertmanagerWebhookAdapter
@@ -9,6 +9,7 @@ from hubble.alerts.models import Alert
 from hubble.alerts.service import AlertLifecycleService
 from hubble.channels.base import ChannelRegistry, ConsoleChannelAdapter
 from hubble.channels.models import ChannelMessage, IncomingChannelMessage
+from hubble.core.models import ToolResult
 from hubble.events.bus import InMemoryEventBus
 from hubble.events.models import EventEnvelope
 from hubble.incidents.models import Incident
@@ -24,6 +25,7 @@ from hubble.policies.models import PolicyDecision
 from hubble.policies.service import PolicyEngine
 from hubble.reasoning.models import Analysis
 from hubble.reasoning.service import ReasoningService
+from hubble.tools.base import ToolContext, ToolRegistry, ToolSpec
 
 
 @dataclass(slots=True)
@@ -34,6 +36,7 @@ class AlertPipelineResult:
     incident: Incident | None = None
     policy: PolicyDecision | None = None
     analysis: Analysis | None = None
+    tool_results: list[ToolResult] = field(default_factory=list)
     duplicate: bool = False
     filtered: bool = False
 
@@ -50,6 +53,7 @@ class HubbleRuntime:
         incident_lifecycle: IncidentLifecycleService | None = None,
         policy_engine: PolicyEngine | None = None,
         reasoning_service: ReasoningService | None = None,
+        tool_registry: ToolRegistry | None = None,
         channel_registry: ChannelRegistry | None = None,
     ) -> None:
         self.event_bus = event_bus or InMemoryEventBus()
@@ -58,6 +62,7 @@ class HubbleRuntime:
         self.incident_lifecycle = incident_lifecycle or IncidentLifecycleService()
         self.policy_engine = policy_engine or PolicyEngine()
         self.reasoning_service = reasoning_service or ReasoningService()
+        self.tool_registry = tool_registry or ToolRegistry()
         self.channel_registry = channel_registry or ChannelRegistry()
 
         if "console" not in self.channel_registry.list_names():
@@ -137,12 +142,22 @@ class HubbleRuntime:
         incident = self.incident_lifecycle.attach_alert(alert)
         policy = self.policy_engine.evaluate(alert, incident)
         analysis: Analysis | None = None
+        tool_results: list[ToolResult] = []
+
+        if policy.enrich_tools and not lifecycle_result.is_duplicate:
+            tool_results = await self._run_enrichment_tools(
+                alert=alert,
+                incident=incident,
+                policy=policy,
+                event=event,
+            )
 
         if policy.should_analyze:
             analysis = await self.reasoning_service.analyze(
                 alert=alert,
                 incident=incident,
                 policy=policy,
+                tool_results=tool_results,
             )
             incident.current_summary = analysis.summary
             incident.last_analysis_id = analysis.id
@@ -174,7 +189,59 @@ class HubbleRuntime:
             incident=incident,
             policy=policy,
             analysis=analysis,
+            tool_results=tool_results,
             duplicate=lifecycle_result.is_duplicate,
+        )
+
+    async def _run_enrichment_tools(
+        self,
+        *,
+        alert: Alert,
+        incident: Incident,
+        policy: PolicyDecision,
+        event: EventEnvelope,
+    ) -> list[ToolResult]:
+        results: list[ToolResult] = []
+        params = _tool_params_from_alert(alert, incident)
+        context = ToolContext(
+            alert_id=alert.id,
+            incident_id=incident.id,
+            trace_id=event.trace_id,
+            tenant_id=event.tenant_id,
+            metadata={"policy_reason": policy.reason},
+        )
+
+        for tool_name in policy.enrich_tools:
+            result = await self.tool_registry.run(tool_name, params, context)
+            results.append(result)
+            await self.event_bus.publish(
+                EventEnvelope(
+                    type="tool.executed",
+                    source="hubble.tools",
+                    subject=incident.id,
+                    data=result.model_dump(mode="json"),
+                    trace_id=event.trace_id,
+                    tenant_id=event.tenant_id,
+                )
+            )
+        return results
+
+    def list_tools(self) -> list[ToolSpec]:
+        return self.tool_registry.list_specs()
+
+    async def run_tool(
+        self,
+        tool_name: str,
+        params: dict[str, Any] | None = None,
+        context: ToolContext | None = None,
+        *,
+        allow_dangerous: bool = False,
+    ) -> ToolResult:
+        return await self.tool_registry.run(
+            tool_name,
+            params or {},
+            context,
+            allow_dangerous=allow_dangerous,
         )
 
     def list_intake_rules(self) -> list[IntakeRule]:
@@ -200,6 +267,20 @@ class HubbleRuntime:
         )
 
 
+def _tool_params_from_alert(alert: Alert, incident: Incident) -> dict[str, Any]:
+    return {
+        "alert": alert.model_dump(mode="json"),
+        "incident": incident.model_dump(mode="json"),
+        "labels": alert.labels,
+        "annotations": alert.annotations,
+        "source": alert.source,
+        "severity": alert.severity,
+        "status": alert.status,
+        "service": alert.labels.get("service") or "",
+        "env": alert.labels.get("env") or "",
+    }
+
+
 def _build_channel_message(
     alert: Alert,
     incident: Incident,
@@ -207,6 +288,10 @@ def _build_channel_message(
 ) -> ChannelMessage:
     causes = "\n".join(f"- {item}" for item in analysis.possible_causes) or "- 暂无"
     actions = "\n".join(f"- {item}" for item in analysis.recommended_actions) or "- 暂无"
+    tool_summary = ""
+    if analysis.tool_results:
+        ok_count = sum(1 for item in analysis.tool_results if item.ok)
+        tool_summary = f"\n\n## 工具上下文\n已执行 {len(analysis.tool_results)} 个，成功 {ok_count} 个。"
 
     body = (
         f"## 发生了什么\n{analysis.summary}\n\n"
@@ -214,7 +299,8 @@ def _build_channel_message(
         f"## 严重程度\n来源级别：{alert.severity}\n分析级别：{analysis.severity}\n\n"
         f"## 可能原因\n{causes}\n\n"
         f"## 影响范围\n{analysis.impact or '待确认'}\n\n"
-        f"## 建议动作\n{actions}\n\n"
+        f"## 建议动作\n{actions}"
+        f"{tool_summary}\n\n"
         f"## 元信息\n"
         f"source={alert.source}\n"
         f"fingerprint={alert.fingerprint}\n"
